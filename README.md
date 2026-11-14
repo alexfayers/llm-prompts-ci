@@ -4,8 +4,8 @@ Shared GitHub Actions for the llm-prompts, cline-hooks and mcp-memory repositori
 
 ## Secrets
 
-- Callers pass `CI_BOT_ID`, `CI_BOT_PRIVATE_KEY` and `PROJECTS_TOKEN` to the workflows that declare them.
-- This repo sets `RELEASER_ID` and `RELEASER_PRIVATE_KEY` for `sync-review-rules.yml`.
+- Callers: `CI_BOT_ID`, `CI_BOT_PRIVATE_KEY`, `PROJECTS_TOKEN`.
+- This repo: `RELEASER_ID`, `RELEASER_PRIVATE_KEY`.
 
 ## Tests
 
