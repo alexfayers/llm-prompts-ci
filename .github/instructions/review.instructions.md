@@ -37,6 +37,7 @@ excludeAgent: "cloud-agent"
 
 - Flag behavior that is broken, errors that are swallowed or mishandled, and new behavior or a fix without a test, when the Severity bar is met.
 - Existing tests that cover the change count. Do not ask for more.
+- Code only moved or ported unchanged needs no restored or new tests. One test through the new entry point covers it.
 - Before claiming a count includes failures, read the code path that records it.
 - Before claiming a `KeyError`, check for a variable that shadows the key or mapping.
 
