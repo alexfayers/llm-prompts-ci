@@ -1,0 +1,51 @@
+name: Releases
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: Repository to release, defaults to all
+        required: false
+        type: string
+  repository_dispatch:
+    types: [release-please]
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      repos: ${{ steps.repos.outputs.repos }}
+    steps:
+      - id: repos
+        env:
+          ALLOWED: '["llm-prompts","cline-hooks","mcp-memory"]'
+          REQUESTED: ${{ github.event.client_payload.repo || inputs.repo }}
+        run: |
+          if [ -z "$REQUESTED" ]; then
+            echo "repos=$ALLOWED" >> "$GITHUB_OUTPUT"
+          elif jq -e --arg repo "$REQUESTED" 'index($repo)' <<< "$ALLOWED" > /dev/null; then
+            echo "repos=[\"$REQUESTED\"]" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Repository is not in the allowlist"
+            exit 1
+          fi
+  release:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: ${{ fromJSON(needs.plan.outputs.repos) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-please.yml
+    with:
+      repo: ${{ matrix.repo }}
+      auto-merge: ${{ github.event_name == 'schedule' }}
+    secrets:
+      RELEASER_CLIENT_ID: ${{ secrets.RELEASER_CLIENT_ID }}
+      RELEASER_PRIVATE_KEY: ${{ secrets.RELEASER_PRIVATE_KEY }}
