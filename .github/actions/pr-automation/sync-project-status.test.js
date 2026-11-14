@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { findPullRequest, isBlocked, resolveStatus } = require('./sync-project-status.js');
+const { findPullRequest, isBlocked, resolveStatus, setStatus } = require('./sync-project-status.js');
 
 const openPr = { state: 'OPEN', isDraft: false, reviewDecision: null };
 const reviewedAs = (...states) => ({ latestOpinionatedReviews: { nodes: states.map((state) => ({ state })) } });
@@ -58,4 +58,38 @@ test('a workflow run maps to the open PR with its head sha, branch and repo', as
 test('a workflow run with no matching PR or more than one finds none', async () => {
   assert.equal(await lookup([listed(1, { sha: 'other' })]), undefined);
   assert.equal(await lookup([listed(1), listed(2)]), undefined);
+});
+
+const PROJECT_ID = 'PVT_kwHOAuJVkc4Bg4S7';
+const trackedGithub = () => {
+  const queries = [];
+  const github = {
+    graphql: async (query) => {
+      queries.push(query);
+      return { addProjectV2ItemById: { item: { id: 'new-item' } } };
+    },
+  };
+  return { github, queries };
+};
+const inProject = (optionId) => ({ id: 'PR_1', projectItems: { nodes: [{ id: 'item', project: { id: 'other' } }, { id: 'item', project: { id: PROJECT_ID }, fieldValueByName: { optionId } }] } });
+
+test('status already set on the project item makes no GraphQL call', async () => {
+  const { github, queries } = trackedGithub();
+  await setStatus(github, inProject('432b1b61'), '432b1b61');
+  assert.equal(queries.length, 0);
+});
+
+test('a different status on an existing project item is updated without adding it again', async () => {
+  const { github, queries } = trackedGithub();
+  await setStatus(github, inProject('47fc9ee4'), '432b1b61');
+  assert.equal(queries.length, 1);
+  assert.match(queries[0], /updateProjectV2ItemFieldValue/);
+});
+
+test('a PR missing from the project is added then given its status', async () => {
+  const { github, queries } = trackedGithub();
+  await setStatus(github, { id: 'PR_1', projectItems: { nodes: [{ id: 'x', project: { id: 'other' } }] } }, '432b1b61');
+  assert.equal(queries.length, 2);
+  assert.match(queries[0], /addProjectV2ItemById/);
+  assert.match(queries[1], /updateProjectV2ItemFieldValue/);
 });
