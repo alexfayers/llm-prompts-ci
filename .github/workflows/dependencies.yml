@@ -5,8 +5,6 @@ on:
     secrets:
       CI_BOT_CLIENT_ID:
         required: false
-      CI_BOT_ID:
-        required: false
       CI_BOT_PRIVATE_KEY:
         required: false
       PROJECTS_TOKEN:
@@ -25,7 +23,6 @@ jobs:
         uses: alexfayers/llm-prompts-ci/.github/actions/app-token@main
         with:
           client-id: ${{ secrets.CI_BOT_CLIENT_ID }}
-          app-id: ${{ secrets.CI_BOT_ID }}
           private-key: ${{ secrets.CI_BOT_PRIVATE_KEY }}
           fallback-token: ${{ secrets.PROJECTS_TOKEN }}
           owner: ${{ github.repository_owner }}
