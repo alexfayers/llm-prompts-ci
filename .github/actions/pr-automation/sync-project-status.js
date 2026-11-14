@@ -101,7 +101,15 @@ async function findPr(github, context, core, extraFields = '') {
   return fetchPr(github, { ...context.repo, number }, extraFields);
 }
 
+function isReleasePr({ payload }) {
+  return (payload.pull_request?.head.ref ?? payload.workflow_run?.head_branch)?.startsWith('release-please--branches--') ?? false;
+}
+
 async function sync({ github, context, core }) {
+  if (isReleasePr(context)) {
+    core.info('Release PR: skipping.');
+    return;
+  }
   const pr = await findPr(github, context, core, PROJECT_ITEM_FIELDS);
   if (!pr) {
     return;
@@ -109,4 +117,4 @@ async function sync({ github, context, core }) {
   await setStatus(github, pr, resolveStatus(pr, await hasReviewRequirements(github, context.repo, pr.headRefOid)));
 }
 
-module.exports = { findPullRequest, findPr, fetchPr, isBlocked, hasReviewRequirements, resolveStatus, setStatus, sync };
+module.exports = { findPullRequest, findPr, isReleasePr, fetchPr, isBlocked, hasReviewRequirements, resolveStatus, setStatus, sync };

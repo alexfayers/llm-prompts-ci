@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { findPullRequest, isBlocked, resolveStatus, setStatus } = require('./sync-project-status.js');
+const { findPullRequest, isBlocked, isReleasePr, resolveStatus, setStatus } = require('./sync-project-status.js');
 
 const openPr = { state: 'OPEN', isDraft: false, reviewDecision: null };
 const reviewedAs = (...states) => ({ latestOpinionatedReviews: { nodes: states.map((state) => ({ state })) } });
@@ -92,4 +92,10 @@ test('a PR missing from the project is added then given its status', async () =>
   assert.equal(queries.length, 2);
   assert.match(queries[0], /addProjectV2ItemById/);
   assert.match(queries[1], /updateProjectV2ItemFieldValue/);
+});
+
+test('release-please PRs are recognised by their branch', () => {
+  assert.equal(isReleasePr({ payload: { pull_request: { head: { ref: 'release-please--branches--main' } } } }), true);
+  assert.equal(isReleasePr({ payload: { workflow_run: { head_branch: 'release-please--branches--main' } } }), true);
+  assert.equal(isReleasePr({ payload: { pull_request: { head: { ref: 'alexfayers/fix' } } } }), false);
 });

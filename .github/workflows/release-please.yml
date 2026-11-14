@@ -1,0 +1,53 @@
+name: Release please
+
+on:
+  workflow_call:
+    inputs:
+      repo:
+        description: Name of the repository to release, in the workflow's owner
+        required: true
+        type: string
+      auto-merge:
+        description: Enable squash auto-merge on the release PR
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      RELEASER_CLIENT_ID:
+        required: true
+      RELEASER_PRIVATE_KEY:
+        required: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    concurrency:
+      group: release-please-${{ inputs.repo }}
+      cancel-in-progress: false
+    steps:
+      - id: releaser
+        uses: alexfayers/llm-prompts-ci/.github/actions/app-token@main
+        with:
+          client-id: ${{ secrets.RELEASER_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASER_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.repo }}
+      - if: steps.releaser.outputs.token == ''
+        run: echo "::error::GitHub App token was not minted" && exit 1
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ steps.releaser.outputs.token }}
+          repo-url: ${{ github.repository_owner }}/${{ inputs.repo }}
+      - if: inputs.auto-merge
+        env:
+          GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          REPO: ${{ github.repository_owner }}/${{ inputs.repo }}
+        run: |
+          number=$(gh api "repos/$REPO/pulls?state=open&head=${REPO%/*}:release-please--branches--main" --jq '.[0].number // empty')
+          if [ -z "$number" ]; then
+            echo "No open release PR"
+            exit 0
+          fi
+          gh pr merge "$number" --repo "$REPO" --auto --squash

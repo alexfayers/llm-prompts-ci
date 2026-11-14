@@ -1,0 +1,29 @@
+name: Release dispatch
+
+on:
+  workflow_call:
+    secrets:
+      CI_BOT_CLIENT_ID:
+        required: true
+      CI_BOT_PRIVATE_KEY:
+        required: true
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - id: ci-bot
+        uses: alexfayers/llm-prompts-ci/.github/actions/app-token@main
+        with:
+          client-id: ${{ secrets.CI_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.CI_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: llm-prompts-ci
+      - if: steps.ci-bot.outputs.token == ''
+        run: echo "::error::GitHub App token was not minted" && exit 1
+      - env:
+          GH_TOKEN: ${{ steps.ci-bot.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+        run: gh api -X POST "repos/$OWNER/llm-prompts-ci/dispatches" -f event_type=release-please -f "client_payload[repo]=$REPO"
