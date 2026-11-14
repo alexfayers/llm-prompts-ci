@@ -32,11 +32,13 @@ function resolveStatus(pr, requirementsMet) {
   return isApproved(pr, requirementsMet) ? STATUS_OPTION.APPROVED : STATUS_OPTION.REVIEW;
 }
 
-async function fetchPr(github, { owner, repo, number }) {
+const PROJECT_ITEM_FIELDS = 'projectItems(first: 20) { nodes { id project { id } fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { optionId } } } }';
+
+async function fetchPr(github, { owner, repo, number }, extraFields = '') {
   const { repository } = await github.graphql(
     `query($owner: String!, $repo: String!, $number: Int!) {
       repository(owner: $owner, name: $repo) {
-        pullRequest(number: $number) { id number state isDraft reviewDecision latestOpinionatedReviews(first: 50) { nodes { state } } headRefOid labels(first: 50) { nodes { name } } }
+        pullRequest(number: $number) { id number state isDraft reviewDecision latestOpinionatedReviews(first: 50) { nodes { state } } headRefOid labels(first: 50) { nodes { name } } ${extraFields} }
       }
     }`,
     { owner, repo, number }
@@ -44,8 +46,8 @@ async function fetchPr(github, { owner, repo, number }) {
   return repository.pullRequest;
 }
 
-async function setStatus(github, contentId, optionId) {
-  const addResult = await github.graphql(
+async function addToProject(github, contentId) {
+  const { addProjectV2ItemById } = await github.graphql(
     `mutation($projectId: ID!, $contentId: ID!) {
       addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
         item { id }
@@ -53,7 +55,15 @@ async function setStatus(github, contentId, optionId) {
     }`,
     { projectId: PROJECT_ID, contentId }
   );
-  const itemId = addResult.addProjectV2ItemById.item.id;
+  return addProjectV2ItemById.item.id;
+}
+
+async function setStatus(github, pr, optionId) {
+  const item = pr.projectItems?.nodes?.find(({ project }) => project.id === PROJECT_ID);
+  if (item?.fieldValueByName?.optionId === optionId) {
+    return;
+  }
+  const itemId = item?.id ?? await addToProject(github, pr.id);
 
   await github.graphql(
     `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
@@ -82,21 +92,21 @@ async function findPullRequest(github, { payload, repo }) {
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-async function findPr(github, context, core) {
+async function findPr(github, context, core, extraFields = '') {
   const number = (await findPullRequest(github, context))?.number;
   if (!number) {
     core.info(`No open PR for ${context.payload.workflow_run.head_sha}; skipping.`);
     return null;
   }
-  return fetchPr(github, { ...context.repo, number });
+  return fetchPr(github, { ...context.repo, number }, extraFields);
 }
 
 async function sync({ github, context, core }) {
-  const pr = await findPr(github, context, core);
+  const pr = await findPr(github, context, core, PROJECT_ITEM_FIELDS);
   if (!pr) {
     return;
   }
-  await setStatus(github, pr.id, resolveStatus(pr, await hasReviewRequirements(github, context.repo, pr.headRefOid)));
+  await setStatus(github, pr, resolveStatus(pr, await hasReviewRequirements(github, context.repo, pr.headRefOid)));
 }
 
-module.exports = { findPullRequest, findPr, fetchPr, isBlocked, hasReviewRequirements, resolveStatus, sync };
+module.exports = { findPullRequest, findPr, fetchPr, isBlocked, hasReviewRequirements, resolveStatus, setStatus, sync };

@@ -114,7 +114,10 @@ runs:
         inputs.project == 'true' &&
         inputs.projects-token != '' &&
         !github.event.repository.private &&
-        (github.event_name == 'pull_request_target' || (github.event_name == 'workflow_run' && github.event.workflow_run.name == 'PR review'))
+        ((github.event_name == 'pull_request_target' &&
+          (contains(fromJSON('["opened", "reopened", "synchronize", "closed", "ready_for_review", "converted_to_draft"]'), github.event.action) ||
+          (contains(fromJSON('["labeled", "unlabeled"]'), github.event.action) && startsWith(github.event.label.name, 'min-reviews:')))) ||
+        (github.event_name == 'workflow_run' && github.event.workflow_run.name == 'PR review'))
       uses: actions/github-script@v9
       env:
         ACTION_PATH: ${{ github.action_path }}
