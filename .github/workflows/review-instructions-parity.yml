@@ -1,0 +1,38 @@
+name: Review instructions parity
+
+on:
+  workflow_call:
+    inputs:
+      canonical-repo:
+        description: Repository holding the canonical copy, defaults to llm-prompts-ci in the caller's owner
+        type: string
+        default: ''
+      files:
+        description: Space-separated review instruction file names to compare
+        type: string
+        default: review.instructions.md python.instructions.md typescript.instructions.md prompts.instructions.md
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Compare with the canonical copy in llm-prompts-ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          CANONICAL_REPO: ${{ inputs.canonical-repo || format('{0}/llm-prompts-ci', github.repository_owner) }}
+          FILES: ${{ inputs.files }}
+        run: |
+          if [ "$HEAD_REF" = bot/copilot-review-rules ]; then
+            echo "Bot PR that syncs the copy: skipping"
+            exit 0
+          fi
+          for name in $FILES; do
+            gh api -H 'Accept: application/vnd.github.raw+json' "repos/$HEAD_REPO/contents/.github/instructions/$name?ref=$HEAD_SHA" > mirror.md
+            curl -fsSL "https://raw.githubusercontent.com/$CANONICAL_REPO/main/.github/instructions/$name" > canonical.md
+            cmp mirror.md canonical.md
+          done
