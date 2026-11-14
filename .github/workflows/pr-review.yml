@@ -1,0 +1,12 @@
+name: PR review
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Review events from forks get a read-only token, so project automation reruns from this run's workflow_run event"

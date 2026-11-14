@@ -1,0 +1,19 @@
+name: PR template
+
+on:
+  workflow_call:
+
+concurrency:
+  group: pr-template-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  pr-template-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: alexfayers/llm-prompts-ci/.github/actions/pr-template@main

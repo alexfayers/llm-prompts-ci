@@ -1,0 +1,31 @@
+name: Dependencies
+
+on:
+  workflow_call:
+    secrets:
+      CI_BOT_ID:
+        required: false
+      CI_BOT_PRIVATE_KEY:
+        required: false
+      PROJECTS_TOKEN:
+        required: false
+
+jobs:
+  check-dependencies:
+    runs-on: ubuntu-latest
+    permissions:
+      checks: read
+      issues: write
+      statuses: write
+      pull-requests: write
+    steps:
+      - id: ci-bot
+        uses: alexfayers/llm-prompts-ci/.github/actions/app-token@main
+        with:
+          app-id: ${{ secrets.CI_BOT_ID }}
+          private-key: ${{ secrets.CI_BOT_PRIVATE_KEY }}
+          fallback-token: ${{ secrets.PROJECTS_TOKEN }}
+          owner: ${{ github.repository_owner }}
+      - uses: alexfayers/llm-prompts-ci/.github/actions/check-dependencies@main
+        with:
+          automation-token: ${{ steps.ci-bot.outputs.token }}
