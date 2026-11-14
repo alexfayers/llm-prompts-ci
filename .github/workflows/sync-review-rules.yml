@@ -28,6 +28,7 @@ jobs:
       - id: releaser
         uses: alexfayers/llm-prompts-ci/.github/actions/app-token@main
         with:
+          client-id: ${{ secrets.RELEASER_CLIENT_ID }}
           app-id: ${{ secrets.RELEASER_ID }}
           private-key: ${{ secrets.RELEASER_PRIVATE_KEY }}
           fallback-token: ${{ secrets.PROJECTS_TOKEN }}
