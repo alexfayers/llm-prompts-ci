@@ -6,6 +6,7 @@ const SAFE_BOT_BRANCHES = {
   'alexfayers-auto-cd[bot]': ['bot/copilot-review-rules', 'release-please--branches--main'],
 };
 const IGNORED_REVIEW_STATES = ['COMMENTED', 'PENDING'];
+const WRITE_PERMISSIONS = ['admin', 'write'];
 
 async function setStatus(github, context, pr, state, description) {
   await github.rest.repos.createCommitStatus({
@@ -63,7 +64,18 @@ async function evaluate({ github, context, pr }) {
   if (states.some(([, state]) => state === 'CHANGES_REQUESTED')) {
     return ['pending', 'Code owner requested changes'];
   }
-  return states.some(([, state]) => state === 'APPROVED') ? ['success', 'Approved by a code owner'] : ['pending', 'Needs a code owner approval'];
+  if (states.some(([, state]) => state === 'APPROVED')) {
+    return ['success', 'Approved by a code owner'];
+  }
+  return (await copilotApprovedCollaboratorPr({ github, context, pr, reviews })) ? ['success', 'Approved by Copilot on a collaborator PR'] : ['pending', 'Needs a code owner approval'];
+}
+
+async function copilotApprovedCollaboratorPr({ github, context, pr, reviews }) {
+  if (![...latestReviewStates(reviews.filter((review) => review.is_copilot_code_review)).values()].includes('APPROVED')) {
+    return false;
+  }
+  const { data } = await github.rest.repos.getCollaboratorPermissionLevel({ ...context.repo, username: pr.user.login });
+  return WRITE_PERMISSIONS.includes(data.permission);
 }
 
 function minReviews(labels) {
