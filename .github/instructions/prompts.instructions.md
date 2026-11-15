@@ -35,7 +35,7 @@ excludeAgent: "cloud-agent"
 ## Size
 
 - Compression keeps every directive. Flag a dropped one.
-- In llm-prompts, check sizes against `src/llm_prompts/size_limits.py` and the allowances declared in the repo. `llm-prompts check` and the CI size report measure them.
+- Don't measure sizes. CI's size report does.
 - Reject a file split or a ceiling raise made only to stay under a budget.
 
 ## Example
