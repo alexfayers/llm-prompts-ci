@@ -3,7 +3,7 @@ const { findPullRequest } = require('./sync-project-status.js');
 const STATUS_CONTEXT = 'codeowner-review';
 const SAFE_BOT_BRANCHES = {
   'renovate[bot]': ['renovate/all-minor-patch', 'renovate/github-actions', 'renovate/lock-file-maintenance', 'renovate/pi-extensions'],
-  'alexfayers-auto-cd[bot]': ['bot/copilot-review-rules', 'release-please--branches--main'],
+  'alexfayers-auto-cd[bot]': ['bot/shared-files', 'release-please--branches--main'],
 };
 const IGNORED_REVIEW_STATES = ['COMMENTED', 'PENDING'];
 const WRITE_PERMISSIONS = ['admin', 'write'];

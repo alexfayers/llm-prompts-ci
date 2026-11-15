@@ -1,4 +1,4 @@
-name: Sync review rules
+name: Sync shared files
 
 on:
   push:
@@ -8,10 +8,11 @@ on:
       - .github/instructions/prompts.instructions.md
       - .github/instructions/python.instructions.md
       - .github/instructions/typescript.instructions.md
+      - templates/release-please-config.json
   workflow_dispatch:
 
 concurrency:
-  group: sync-review-rules
+  group: sync-shared-files
   cancel-in-progress: false
 
 jobs:
@@ -40,24 +41,28 @@ jobs:
           path: target
       - run: mkdir -p target/.github/instructions
       - run: cp .github/instructions/{review,prompts,python,typescript}.instructions.md target/.github/instructions/
+      - run: sed "s/__REPO__/$REPO/" templates/release-please-config.json > target/release-please-config.json
+        env:
+          REPO: ${{ matrix.repo }}
       - id: pr
         uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ steps.releaser.outputs.token }}
           path: target
-          branch: bot/copilot-review-rules
+          branch: bot/shared-files
           delete-branch: true
-          commit-message: 'chore: sync Copilot review rules from llm-prompts-ci'
-          title: 'chore: sync Copilot review rules from llm-prompts-ci'
+          commit-message: 'chore: sync shared files from llm-prompts-ci'
+          title: 'chore: sync shared files from llm-prompts-ci'
           body: |
             ## What
 
             - Copy the Copilot review rules from llm-prompts-ci to `.github/instructions/`.
+            - Copy the release-please config from llm-prompts-ci to `release-please-config.json`.
 
             ## Why
 
-            - llm-prompts-ci is the one place that edits the rules.
-            - Copilot review only sees this repo's own checkout, so the copy has to be committed here.
+            - llm-prompts-ci is the one place that edits these files.
+            - Copilot review and release-please only read this repo's own files, so the copies have to be committed here.
       - if: steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'
         run: gh pr merge --auto --squash "$PR_URL"
         env:
