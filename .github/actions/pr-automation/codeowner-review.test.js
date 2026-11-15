@@ -110,10 +110,10 @@ test('bot PRs pass without review only from known-safe branches', async () => {
     ['renovate[bot]', 'feature/all-minor-patch', [], [], 'pending'],
     ['dependabot[bot]', 'renovate/all-minor-patch', [], [], 'pending'],
     ['stranger', 'renovate/all-minor-patch', [], [], 'pending'],
-    ['alexfayers-auto-cd[bot]', 'bot/copilot-review-rules', [], [], 'success'],
+    ['alexfayers-auto-cd[bot]', 'bot/shared-files', [], [], 'success'],
     ['alexfayers-auto-cd[bot]', 'bot/other', [], [], 'pending'],
-    ['renovate[bot]', 'bot/copilot-review-rules', [], [], 'pending'],
-    ['constructor', 'bot/copilot-review-rules', [], [], 'pending'],
+    ['renovate[bot]', 'bot/shared-files', [], [], 'pending'],
+    ['constructor', 'bot/shared-files', [], [], 'pending'],
   ]) {
     const f = fixture({ author, files: ['README.md'], labels, reviews, branch });
     await gate(f);

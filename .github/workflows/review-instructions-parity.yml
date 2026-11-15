@@ -27,7 +27,7 @@ jobs:
           CANONICAL_REPO: ${{ inputs.canonical-repo || format('{0}/llm-prompts-ci', github.repository_owner) }}
           FILES: ${{ inputs.files }}
         run: |
-          if [ "$HEAD_REF" = bot/copilot-review-rules ]; then
+          if [ "$HEAD_REF" = bot/shared-files ]; then
             echo "Bot PR that syncs the copy: skipping"
             exit 0
           fi
