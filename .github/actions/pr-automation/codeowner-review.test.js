@@ -4,7 +4,7 @@ const { gate } = require('./codeowner-review.js');
 
 const CODEOWNERS = '*.md @Owner\n/src/*/prompts/**/rules/ @Owner @friend\n/src/*/prompts/**/skills/ @Owner @friend\n/src/*/prompts/**/skills/pi-help/ @Owner\n/src/*/prompts/**/rules/hooks*.md @Owner\na**b/ @friend\na?c @friend\n';
 
-function fixture({ author, files, reviews = [], labels = [], branch = 'feature', requested = [], draft = false }) {
+function fixture({ author, files, reviews = [], labels = [], branch = 'feature', requested = [], draft = false, permission = 'none' }) {
   const calls = [];
   const requests = [];
   const github = {
@@ -14,6 +14,7 @@ function fixture({ author, files, reviews = [], labels = [], branch = 'feature',
       repos: {
         getContent: async ({ path, ref }) => ({ data: { content: Buffer.from(CODEOWNERS).toString('base64'), path, ref } }),
         createCommitStatus: async ({ sha, context, state }) => calls.push([sha, context, state]),
+        getCollaboratorPermissionLevel: async () => ({ data: { permission } }),
       },
     },
   };
@@ -155,6 +156,21 @@ test('a Copilot code review approval does not count toward min-reviews', async (
     const f = fixture({ author: 'stranger', files: ['README.md'], reviews, labels: ['min-reviews:2'] });
     await gate(f);
     assert.deepEqual(f.calls, [['abc', 'codeowner-review', state]], JSON.stringify(reviews));
+  }
+});
+
+test('a Copilot approval stands in for a code owner only on a PR by a collaborator with write access', async () => {
+  const copilot = ['copilot-pull-request-reviewer[bot]', 'APPROVED', true];
+  for (const [permission, reviews, state] of [
+    ['write', [copilot], 'success'],
+    ['admin', [copilot], 'success'],
+    ['read', [copilot], 'pending'],
+    ['none', [copilot], 'pending'],
+    ['write', [copilot, ['owner', 'CHANGES_REQUESTED']], 'pending'],
+  ]) {
+    const f = fixture({ author: 'stranger', files: ['README.md'], reviews, permission });
+    await gate(f);
+    assert.deepEqual(f.calls, [['abc', 'codeowner-review', state]], JSON.stringify([permission, reviews]));
   }
 });
 
