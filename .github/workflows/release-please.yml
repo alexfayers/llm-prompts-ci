@@ -57,3 +57,14 @@ jobs:
             const { thank } = require('./.shared-automation/.github/scripts/release/thanks.js')
             const { OWNER: owner, REPO: repo, RELEASE_TAG: releaseTag } = process.env
             await thank({ github, core, owner, repo, releaseTag })
+      - if: inputs.auto-merge
+        env:
+          GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          REPO: ${{ github.repository_owner }}/${{ inputs.repo }}
+        run: |
+          number=$(gh api "repos/$REPO/pulls?state=open&head=${REPO%/*}:release-please--branches--main" --jq '.[0].number // empty')
+          if [ -z "$number" ]; then
+            echo "No open release PR"
+            exit 0
+          fi
+          gh pr merge "$number" --repo "$REPO" --auto --squash
