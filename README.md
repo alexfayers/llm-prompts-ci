@@ -10,7 +10,7 @@ Shared GitHub Actions for the llm-prompts, cline-hooks and mcp-memory repositori
 ## Releases
 
 - `releases.yml` runs release-please for llm-prompts, cline-hooks and mcp-memory with the RELEASER app. A daily run also enables auto-merge on each release PR.
-- `release-please.yml` thanks PR authors in the release PR and notes, except bots and the repo owner.
+- `release-please.yml` credits each release note line with its PR author, except bots and the repo owner.
 - Each repo calls `release-dispatch.yml` on push to main, which triggers `releases.yml` for that repo.
 
 ## Tests

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { thank } = require('./thanks.js');
 
 const human = (login) => ({ login, type: 'User' });
-const merged = (user) => ({ user, merged_at: '2026-01-01T00:00:00Z' });
+const merged = (user, number) => ({ user, merged_at: '2026-01-01T00:00:00Z', number });
 
 function fakeCore() {
   const warnings = [];
@@ -38,75 +38,47 @@ function fakeGithub({ releases = [{ id: 1, tag_name: 'v0.1.0', body: 'notes' }],
   };
 }
 
-test('adds sorted, de-duplicated human PR authors since the last release to the release PR body', async () => {
+function changelogLine(number, summary) {
+  return `* **deps:** ${summary} ([#${number}](https://github.com/o/r/issues/${number})) ([650178f](https://github.com/o/r/commit/650178f))`;
+}
+
+test('credits each changelog line with its PR author, skipping bots and the repo owner', async () => {
+  const body = [changelogLine(489, 'update x'), changelogLine(490, 'fix y'), changelogLine(491, 'tidy z')].join('\n');
   const github = fakeGithub({
+    pr: { number: 9, body },
     commits: {
-      a: [merged(human('bob'))],
-      b: [merged(human('alice'))],
-      c: [merged(human('bob'))],
-      d: [merged({ login: 'renovate[bot]', type: 'Bot' })],
-      e: [merged({ login: 'helper', type: 'Bot' })],
-      f: [merged(human('o'))],
-      g: [{ user: human('carol'), merged_at: null }],
+      a: [merged(human('alice'), 489)],
+      b: [merged(human('o'), 490)],
+      c: [merged({ login: 'renovate[bot]', type: 'Bot' }, 491)],
     },
   });
   await thank({ github, core: fakeCore(), owner: 'o', repo: 'r' });
-  assert.deepEqual(github.calls.compare, ['v0.1.0...main']);
-  assert.deepEqual(github.calls.updatePull, [
-    { owner: 'o', repo: 'r', pull_number: 9, body: 'release body\n\n<!-- thanks -->\n### Thanks\n\n- @alice\n- @bob\n' },
-  ]);
+  const [line489, line490, line491] = github.calls.updatePull[0].body.split('\n');
+  assert.match(line489, / by @alice$/);
+  assert.doesNotMatch(line490, / by @/);
+  assert.doesNotMatch(line491, / by @/);
 });
 
-test('replaces an earlier thanks section and drops it when nobody is left to thank', async () => {
-  const earlier = 'release body\n\n<!-- thanks -->\n### Thanks\n\n- @old\n';
-  const github = fakeGithub({ pr: { number: 9, body: earlier }, commits: { a: [merged(human('alice'))] } });
-  await thank({ github, core: fakeCore(), owner: 'o', repo: 'r' });
-  assert.equal(github.calls.updatePull[0].body, 'release body\n\n<!-- thanks -->\n### Thanks\n\n- @alice\n');
-
-  const botsOnly = fakeGithub({ pr: { number: 9, body: earlier }, commits: { a: [merged({ login: 'renovate[bot]', type: 'Bot' })] } });
-  await thank({ github: botsOnly, core: fakeCore(), owner: 'o', repo: 'r' });
-  assert.equal(botsOnly.calls.updatePull[0].body, 'release body');
-});
-
-test('leaves the PR body alone when the thanks section would not change', async () => {
-  const unchanged = 'release body\n\n<!-- thanks -->\n### Thanks\n\n- @alice\n';
-  const github = fakeGithub({ pr: { number: 9, body: unchanged }, commits: { a: [merged(human('alice'))] } });
-  await thank({ github, core: fakeCore(), owner: 'o', repo: 'r' });
-  assert.equal(github.calls.updatePull.length, 0);
-});
-
-test('adds the thanks section to a created release, counting PRs since the previous release', async () => {
+test('rewrites release-please issues links to pull links for PR numbers it looked up', async () => {
+  const body = changelogLine(489, 'update x');
   const github = fakeGithub({
-    releases: [
-      { id: 2, tag_name: 'v0.2.0', body: 'new notes' },
-      { id: 1, tag_name: 'v0.1.0', body: 'old notes' },
-    ],
-    pr: null,
-    commits: { a: [merged(human('alice'))] },
+    pr: { number: 9, body },
+    commits: { a: [merged(human('alice'), 489)] },
   });
-  await thank({ github, core: fakeCore(), owner: 'o', repo: 'r', releaseTag: 'v0.2.0' });
-  assert.deepEqual(github.calls.compare, ['v0.1.0...v0.2.0']);
-  assert.deepEqual(github.calls.updateRelease, [
-    { owner: 'o', repo: 'r', release_id: 2, body: 'new notes\n\n<!-- thanks -->\n### Thanks\n\n- @alice\n' },
-  ]);
-  assert.equal(github.calls.updatePull.length, 0);
+  await thank({ github, core: fakeCore(), owner: 'o', repo: 'r' });
+  const updated = github.calls.updatePull[0].body;
+  assert.match(updated, /\/pull\/489/);
+  assert.doesNotMatch(updated, /\/issues\/489/);
 });
 
-test('warns instead of throwing when updating the release fails', async () => {
-  const github = fakeGithub({
-    releases: [
-      { id: 2, tag_name: 'v0.2.0', body: 'new notes' },
-      { id: 1, tag_name: 'v0.1.0', body: 'old notes' },
-    ],
-    commits: { a: [merged(human('alice'))] },
-  });
-  github.rest.repos.updateRelease = async () => {
-    throw new Error('boom');
-  };
-  const core = fakeCore();
-  await thank({ github, core, owner: 'o', repo: 'r', releaseTag: 'v0.2.0' });
-  assert.deepEqual(core.warnings, ['Could not add release thanks: boom']);
-  assert.deepEqual(github.calls.updatePull, [
-    { owner: 'o', repo: 'r', pull_number: 9, body: 'release body\n\n<!-- thanks -->\n### Thanks\n\n- @alice\n' },
-  ]);
+test('stays idempotent: running the script again on its own output makes no further change', async () => {
+  const body = changelogLine(489, 'update x');
+  const first = fakeGithub({ pr: { number: 9, body }, commits: { a: [merged(human('alice'), 489)] } });
+  await thank({ github: first, core: fakeCore(), owner: 'o', repo: 'r' });
+  const onceCredited = first.calls.updatePull[0].body;
+
+  const second = fakeGithub({ pr: { number: 9, body: onceCredited }, commits: { a: [merged(human('alice'), 489)] } });
+  await thank({ github: second, core: fakeCore(), owner: 'o', repo: 'r' });
+
+  assert.equal(second.calls.updatePull.length, 0);
 });
