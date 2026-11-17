@@ -8,6 +8,11 @@ on:
         required: false
         type: boolean
         default: true
+      review-owners:
+        description: Extra owners a PR Copilot did not approve needs. Each line is a path regex followed by the GitHub users who own matching paths.
+        required: false
+        type: string
+        default: ''
     secrets:
       CI_BOT_CLIENT_ID:
         required: false
@@ -38,3 +43,4 @@ jobs:
           projects-token: ${{ secrets.PROJECTS_TOKEN }}
           github-token: ${{ github.token }}
           project: ${{ inputs.project }}
+          review-owners: ${{ inputs.review-owners }}

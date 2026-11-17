@@ -1,5 +1,5 @@
 name: PR automation
-description: Sync a public repo's PR status onto the llm-prompts ecosystem project board, enable squash auto-merge on ready contribute PRs, assign the PR author, apply a breaking label from the PR title or body, label blocked PRs, label PRs with merge conflicts or failing required checks as blocked, apply path-based area labels, report a codeowner-review commit status and request the repo owner's review when it is needed, report a copilot-review commit status that waits for a requested Copilot review, and label PRs ready to auto-rebase, and rebase auto-rebase PRs onto the base branch when it moves or when the label is added.
+description: Sync a public repo's PR status onto the llm-prompts ecosystem project board, enable squash auto-merge on ready contribute PRs, assign the PR author, apply a breaking label from the PR title or body, label blocked PRs, label PRs with merge conflicts or failing required checks as blocked, apply path-based area labels, report a codeowner-review commit status and request the needed owners' review, report a copilot-review commit status that waits for a requested Copilot review, and label PRs ready to auto-rebase, and rebase auto-rebase PRs onto the base branch when it moves or when the label is added.
 inputs:
   automation-token:
     description: Token for enabling auto-merge, for rebasing PRs and for removing the blocked label. Unlike github.token, it makes these changes start new workflow runs. In a private repo, scope the token to that repo only.
@@ -14,6 +14,10 @@ inputs:
     description: Set to "false" to skip syncing PR status onto the project board.
     required: false
     default: 'true'
+  review-owners:
+    description: Extra owners a PR Copilot did not approve needs. Each line is a path regex followed by the GitHub users who own matching paths.
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
@@ -99,10 +103,11 @@ runs:
     - name: Codeowner review gate
       if: |
         (github.event_name == 'pull_request_target' && contains(fromJSON('["opened", "reopened", "synchronize", "ready_for_review", "converted_to_draft", "edited", "labeled", "unlabeled", "auto_merge_enabled"]'), github.event.action)) ||
-        (github.event_name == 'workflow_run' && github.event.workflow_run.name == 'PR review')
+        (github.event_name == 'workflow_run' && contains(fromJSON('["CI", "PR review"]'), github.event.workflow_run.name))
       uses: actions/github-script@v9
       env:
         ACTION_PATH: ${{ github.action_path }}
+        REVIEW_OWNERS: ${{ inputs.review-owners }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |

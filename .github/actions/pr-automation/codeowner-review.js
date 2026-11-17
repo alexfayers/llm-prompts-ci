@@ -1,4 +1,5 @@
 const { findPullRequest } = require('./sync-project-status.js');
+const { copilotRequested, isCopilot, isCopilotReview } = require('./copilot-review.js');
 
 const STATUS_CONTEXT = 'codeowner-review';
 const SAFE_BOT_BRANCHES = {
@@ -7,6 +8,7 @@ const SAFE_BOT_BRANCHES = {
 };
 const IGNORED_REVIEW_STATES = ['COMMENTED', 'PENDING'];
 const WRITE_PERMISSIONS = ['admin', 'write'];
+const CHANGES_REQUESTED = 'Code owner requested changes';
 
 async function setStatus(github, context, pr, state, description) {
   await github.rest.repos.createCommitStatus({
@@ -27,11 +29,22 @@ function patternToRegExp(pattern) {
 }
 
 async function readCodeOwners(github, { owner, repo }, ref) {
-  const { data } = await github.rest.repos.getContent({ owner, repo, path: 'CODEOWNERS', ref });
+  let data;
+  try {
+    ({ data } = await github.rest.repos.getContent({ owner, repo, path: 'CODEOWNERS', ref }));
+  } catch (error) {
+    if (error.status === 404) return [];
+    throw error;
+  }
   return Buffer.from(data.content, 'base64').toString().split('\n')
     .map((line) => line.replace(/#.*/, '').trim())
     .filter(Boolean)
     .map((line) => ({ pattern: patternToRegExp(line.split(/\s+/)[0]), owners: (line.match(/@[\w-]+/g) ?? []).map((handle) => handle.slice(1).toLowerCase()) }));
+}
+
+function reviewOwners(text) {
+  return text.split('\n').map((line) => line.trim().split(/\s+/)).filter(([first]) => first)
+    .map(([first, ...owners]) => ({ pattern: new RegExp(first), owners: owners.map((login) => login.toLowerCase()) }));
 }
 
 function latestReviewStates(reviews) {
@@ -44,36 +57,64 @@ function latestReviewStates(reviews) {
   return states;
 }
 
+/** Copilot's verdict: 'approved' (approved, or its latest review left no comments), 'commented', 'pending' (requested, not reviewed) or 'never'. */
+async function copilotVerdict({ github, context, pr, reviews }) {
+  const latest = reviews.filter(isCopilotReview).at(-1);
+  if (!latest) return (await copilotRequested(github, context, pr)) ? 'pending' : 'never';
+  if (latest.commit_id !== pr.head.sha) return pr.requested_reviewers?.some(isCopilot) ? 'pending' : 'never';
+  if (latest.state !== 'COMMENTED') return latest.state === 'APPROVED' ? 'approved' : 'commented';
+  const comments = await github.paginate(github.rest.pulls.listCommentsForReview, { ...context.repo, pull_number: pr.number, review_id: latest.id, per_page: 100 });
+  return comments.length ? 'commented' : 'approved';
+}
+
+/** Returns [state, description, owners to ask, reviews, min-reviews applied]: the owners only when the gate or min-reviews should request them. */
 async function evaluate({ github, context, pr }) {
   const { owner, repo } = context.repo;
   if (Object.hasOwn(SAFE_BOT_BRANCHES, pr.user.login) && SAFE_BOT_BRANCHES[pr.user.login].includes(pr.head.ref)) {
-    return ['success', 'Bot PR needs no code owner review'];
+    return ['success', 'Bot PR needs no code owner review', []];
   }
   const author = pr.user.login.toLowerCase();
-  const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number: pr.number, per_page: 100 });
-  const rules = await readCodeOwners(github, context.repo, pr.base.ref);
   const repoOwner = owner.toLowerCase();
+  const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number: pr.number, per_page: 100 });
+  const reviews = await github.paginate(github.rest.pulls.listReviews, { owner, repo, pull_number: pr.number, per_page: 100 });
+  const verdict = await copilotVerdict({ github, context, pr, reviews });
+  const paths = files.flatMap(({ filename, previous_filename }) => [filename, previous_filename].filter(Boolean));
+  if (['commented', 'never'].includes(verdict) && paths.length) {
+    const needed = [...new Set([repoOwner, ...reviewOwners(process.env.REVIEW_OWNERS ?? '').filter(({ pattern }) => paths.some((path) => pattern.test(path))).flatMap(({ owners }) => owners)])].filter((login) => login !== author);
+    if (!needed.length) {
+      return ['success', 'No owner review needed', [], reviews];
+    }
+    // A Copilot request can show up after pull_request_target events, so ask a never-asked PR's owners only after a workflow run.
+    const ask = verdict === 'commented' || context.eventName === 'workflow_run';
+    const count = Math.max(1, minReviews(pr.labels ?? []));
+    return [...ownerVerdict(reviews, needed, author, count > 1 ? `Needs ${count} owner approvals` : 'Needs an owner approval', count), ask ? needed : [], reviews, true];
+  }
+  if (verdict === 'pending') {
+    return ['pending', 'Waiting for the requested Copilot review', [], reviews];
+  }
+  const rules = await readCodeOwners(github, context.repo, pr.base.ref);
   const needsReview = (path) => (rules.findLast(({ pattern }) => pattern.test(path))?.owners ?? [repoOwner]).some((handle) => handle !== author);
   if (!files.some(({ filename, previous_filename }) => [filename, previous_filename].some((path) => path && needsReview(path)))) {
-    return ['success', 'No code owner review needed'];
+    return ['success', 'No code owner review needed', []];
   }
-
-  const owners = new Set([repoOwner, ...rules.flatMap((rule) => rule.owners)]);
-  const reviews = await github.paginate(github.rest.pulls.listReviews, { owner, repo, pull_number: pr.number, per_page: 100 });
-  const states = [...latestReviewStates(reviews)].filter(([login]) => owners.has(login) && login !== author);
-  if (states.some(([, state]) => state === 'CHANGES_REQUESTED')) {
-    return ['pending', 'Code owner requested changes'];
+  const owners = [repoOwner].filter((login) => login !== author);
+  const result = ownerVerdict(reviews, new Set([repoOwner, ...rules.flatMap((rule) => rule.owners)]), author, 'Needs a code owner approval');
+  if (result[0] === 'pending' && result[1] !== CHANGES_REQUESTED && verdict === 'approved' && (await isCollaborator({ github, context, pr }))) {
+    return ['success', 'Approved by Copilot on a collaborator PR', owners, reviews];
   }
-  if (states.some(([, state]) => state === 'APPROVED')) {
-    return ['success', 'Approved by a code owner'];
-  }
-  return (await copilotApprovedCollaboratorPr({ github, context, pr, reviews })) ? ['success', 'Approved by Copilot on a collaborator PR'] : ['pending', 'Needs a code owner approval'];
+  return [...result, owners, reviews];
 }
 
-async function copilotApprovedCollaboratorPr({ github, context, pr, reviews }) {
-  if (![...latestReviewStates(reviews.filter((review) => review.is_copilot_code_review)).values()].includes('APPROVED')) {
-    return false;
+function ownerVerdict(reviews, owners, author, waiting, count = 1) {
+  const allowed = new Set(owners);
+  const states = [...latestReviewStates(reviews)].filter(([login]) => allowed.has(login) && login !== author);
+  if (states.some(([, state]) => state === 'CHANGES_REQUESTED')) {
+    return ['pending', CHANGES_REQUESTED];
   }
+  return states.filter(([, state]) => state === 'APPROVED').length >= count ? ['success', 'Approved by a code owner'] : ['pending', waiting];
+}
+
+async function isCollaborator({ github, context, pr }) {
   const { data } = await github.rest.repos.getCollaboratorPermissionLevel({ ...context.repo, username: pr.user.login });
   return WRITE_PERMISSIONS.includes(data.permission);
 }
@@ -88,22 +129,21 @@ async function evaluateMinReviews({ github, context, pr }) {
   if (needed === 0) {
     return null;
   }
-  const reviews = (await github.paginate(github.rest.pulls.listReviews, { ...context.repo, pull_number: pr.number, per_page: 100 })).filter((review) => !review.is_copilot_code_review);
+  const reviews = (await github.paginate(github.rest.pulls.listReviews, { ...context.repo, pull_number: pr.number, per_page: 100 })).filter((review) => !isCopilotReview(review));
   const author = pr.user.login.toLowerCase();
   const approvals = [...latestReviewStates(reviews)].filter(([login, state]) => login !== author && state === 'APPROVED').length;
   return approvals >= needed ? null : ['pending', `Needs ${needed} approval${needed > 1 ? 's' : ''} (${approvals} so far)`];
 }
 
-async function requestOwnerReview({ github, context, pr }) {
-  const { owner } = context.repo;
-  if (pr.draft || pr.requested_reviewers?.length || pr.requested_teams?.length || pr.user.login.toLowerCase() === owner.toLowerCase()) {
+async function requestOwners({ github, context, pr, owners, reviews }) {
+  if (pr.draft || !owners.length) {
     return;
   }
-  const reviews = await github.paginate(github.rest.pulls.listReviews, { ...context.repo, pull_number: pr.number, per_page: 100 });
-  if (reviews.some(({ user }) => user.login.toLowerCase() === owner.toLowerCase())) {
-    return;
+  const done = new Set([...(pr.requested_reviewers ?? []), ...reviews.map(({ user }) => user)].map(({ login }) => login.toLowerCase()));
+  const reviewers = owners.filter((login) => !done.has(login));
+  if (reviewers.length) {
+    await github.rest.pulls.requestReviewers({ ...context.repo, pull_number: pr.number, reviewers });
   }
-  await github.rest.pulls.requestReviewers({ ...context.repo, pull_number: pr.number, reviewers: [owner] });
 }
 
 async function gate({ github, context }) {
@@ -111,18 +151,18 @@ async function gate({ github, context }) {
   if (!pr) {
     return;
   }
-  let status;
+  let result;
+  let required;
   try {
-    const result = await evaluate({ github, context, pr });
-    const required = result[0] === 'success' ? await evaluateMinReviews({ github, context, pr }) : null;
-    status = required ?? result;
-    await setStatus(github, context, pr, ...status);
+    result = await evaluate({ github, context, pr });
+    required = result[0] === 'success' && !result[4] ? await evaluateMinReviews({ github, context, pr }) : null;
+    await setStatus(github, context, pr, ...(required ?? result.slice(0, 2)));
   } catch (error) {
     await setStatus(github, context, pr, 'error', 'Code owner review check failed to run');
     throw error;
   }
-  if (status[0] === 'pending') {
-    await requestOwnerReview({ github, context, pr });
+  if ((required ?? result)[0] === 'pending') {
+    await requestOwners({ github, context, pr, owners: result[2], reviews: result[3] });
   }
 }
 

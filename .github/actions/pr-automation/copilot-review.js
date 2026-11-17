@@ -82,4 +82,4 @@ async function holdAutoMerge({ github, context, core }) {
   });
 }
 
-module.exports = { gate, holdAutoMerge };
+module.exports = { gate, holdAutoMerge, copilotRequested, isCopilot, isCopilotReview };
