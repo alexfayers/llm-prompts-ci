@@ -61,14 +61,18 @@ function latestReviewStates(reviews) {
   return states;
 }
 
-/** Copilot's verdict: 'approved' (approved, or its latest review left no comments), 'commented', 'pending' (requested, not reviewed) or 'never'. */
+/** Copilot's verdict: 'approved' (approved, or its latest review left no comments or only low-severity findings), 'commented', 'pending' (requested, not reviewed) or 'never'. */
 async function copilotVerdict({ github, context, pr, reviews }) {
   const latest = reviews.filter(isCopilotReview).at(-1);
   if (!latest) return (await copilotRequested(github, context, pr)) ? 'pending' : 'never';
   if (latest.commit_id !== pr.head.sha) return pr.requested_reviewers?.some(isCopilot) ? 'pending' : 'never';
   if (latest.state !== 'COMMENTED') return latest.state === 'APPROVED' ? 'approved' : 'commented';
   const comments = await github.paginate(github.rest.pulls.listCommentsForReview, { ...context.repo, pull_number: pr.number, review_id: latest.id, per_page: 100 });
-  return comments.length ? 'commented' : 'approved';
+  const body = latest.body ?? '';
+  const severities = [...body.matchAll(/alt="([^"]+) severity"/g)].map(([, severity]) => severity);
+  const listed = new Set([...body.matchAll(/discussion_r(\d+)/g)].map(([, id]) => id));
+  const lowOnly = body.includes('<!-- ccr-overview-v2 -->') && severities.length && severities.every((severity) => severity === 'Low') && comments.every(({ id }) => listed.has(String(id)));
+  return (comments.length && !lowOnly) || severities.some((severity) => severity !== 'Low') ? 'commented' : 'approved';
 }
 
 /** Returns [state, description, owners to ask, reviews, min-reviews applied]: the owners only when the gate or min-reviews should request them. */

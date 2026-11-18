@@ -17,7 +17,7 @@ function fixture({ author, files, reviews = [], labels = [], branch = 'feature',
   const github = {
     paginate: async (method) => method.items,
     rest: {
-      pulls: { listFiles: { items: files.map((file) => (typeof file === 'string' ? { filename: file } : file)) }, listReviews: { items: reviews.map(([login, state, copilot, commit_id = 'abc'], id) => ({ id, user: { login }, state, is_copilot_code_review: copilot, commit_id })) }, listCommentsForReview: { items: copilotComments }, requestReviewers: async ({ pull_number, reviewers }) => requests.push([pull_number, reviewers]) },
+      pulls: { listFiles: { items: files.map((file) => (typeof file === 'string' ? { filename: file } : file)) }, listReviews: { items: reviews.map(([login, state, copilot, commit_id = 'abc', body = ''], id) => ({ id, user: { login }, state, is_copilot_code_review: copilot, commit_id, body })) }, listCommentsForReview: { items: copilotComments }, requestReviewers: async ({ pull_number, reviewers }) => requests.push([pull_number, reviewers]) },
       repos: {
         getContent: async ({ path, ref }) => {
           if (codeowners === null) throw Object.assign(new Error('Not Found'), { status: 404 });
@@ -328,6 +328,24 @@ test('a Copilot review with no comments counts as an approval on a collaborator 
   const f = fixture({ author: 'alice', files: [PROMPT_FILE], reviews: [['copilot-pull-request-reviewer[bot]', 'COMMENTED', true]], permission: 'write' });
   await gate(f);
   assert.deepEqual([f.calls, f.requests], [[['abc', 'codeowner-review', 'success']], []]);
+});
+
+test('a Copilot review whose findings are all low severity counts as an approval', async () => {
+  const finding = (severity, id) => `- <img src="x.png" alt="${severity} severity" width="62"> [a](https://github.com/o/r/pull/7#discussion_r${id})`;
+  for (const [name, body, ids, state, requests] of [
+    ['low only', `<!-- ccr-overview-v2 -->\n${finding('Low', 1)}\n${finding('Low', 2)}`, [1, 2], 'success', []],
+    ['a medium finding', `<!-- ccr-overview-v2 -->\n${finding('Low', 1)}\n${finding('Medium', 2)}`, [1, 2], 'pending', [[7, ['owner']]]],
+    ['a multi-word label', `<!-- ccr-overview-v2 -->\n${finding('Low', 1)}\n${finding('Very high', 2)}`, [1, 2], 'pending', [[7, ['owner']]]],
+    ['a comment missing from the body', `<!-- ccr-overview-v2 -->\n${finding('Low', 1)}`, [1, 2], 'pending', [[7, ['owner']]]],
+    ['a comment id that only prefixes a listed id', `<!-- ccr-overview-v2 -->\n${finding('Low', 123)}`, [12], 'pending', [[7, ['owner']]]],
+    ['a medium finding without inline comments', `<!-- ccr-overview-v2 -->\n${finding('Medium', 2)}`, [], 'pending', [[7, ['owner']]]],
+    ['no markers', '<!-- ccr-overview-v2 -->\nLooks fine', [1], 'pending', [[7, ['owner']]]],
+    ['no overview', finding('Low', 1), [1], 'pending', [[7, ['owner']]]],
+  ]) {
+    const f = fixture({ author: 'alice', files: ['src/llm_prompts/cli.py'], reviews: [['copilot-pull-request-reviewer[bot]', 'COMMENTED', true, 'abc', body]], copilotComments: ids.map((id) => ({ id })), copilotApproved: false, permission: 'write' });
+    await gate(f);
+    assert.deepEqual([f.calls, f.requests], [[['abc', 'codeowner-review', state]], requests], name);
+  }
 });
 
 test('a Copilot review requesting changes without inline comments is not an approval', async () => {
