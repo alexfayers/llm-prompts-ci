@@ -15,7 +15,7 @@ inputs:
     required: false
     default: 'true'
   review-owners:
-    description: Extra owners a PR Copilot did not approve needs. Each line is a path regex followed by the GitHub users who own matching paths.
+    description: Extra owners a PR Copilot did not approve needs. Each line uses CODEOWNERS syntax. The last matching line wins. A pattern with no users clears the extra owners. The repo owner is always needed.
     required: false
     default: ''
 runs:

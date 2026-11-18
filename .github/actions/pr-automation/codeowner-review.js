@@ -36,15 +36,19 @@ async function readCodeOwners(github, { owner, repo }, ref) {
     if (error.status === 404) return [];
     throw error;
   }
-  return Buffer.from(data.content, 'base64').toString().split('\n')
-    .map((line) => line.replace(/#.*/, '').trim())
-    .filter(Boolean)
-    .map((line) => ({ pattern: patternToRegExp(line.split(/\s+/)[0]), owners: (line.match(/@[\w-]+/g) ?? []).map((handle) => handle.slice(1).toLowerCase()) }));
+  return parseCodeOwners(Buffer.from(data.content, 'base64').toString());
 }
 
-function reviewOwners(text) {
-  return text.split('\n').map((line) => line.trim().split(/\s+/)).filter(([first]) => first)
-    .map(([first, ...owners]) => ({ pattern: new RegExp(first), owners: owners.map((login) => login.toLowerCase()) }));
+function parseCodeOwners(text) {
+  return text.split('\n')
+    .map((line) => line.replace(/#.*/, '').trim())
+    .filter(Boolean)
+    .map((line) => line.split(/\s+/))
+    .map(([pattern, ...owners]) => ({ pattern: patternToRegExp(pattern), owners: owners.filter((handle) => /^@?[\w-]+$/.test(handle)).map((handle) => handle.replace(/^@/, '').toLowerCase()) }));
+}
+
+function ownersOf(rules, path) {
+  return rules.findLast(({ pattern }) => pattern.test(path))?.owners;
 }
 
 function latestReviewStates(reviews) {
@@ -80,7 +84,8 @@ async function evaluate({ github, context, pr }) {
   const verdict = await copilotVerdict({ github, context, pr, reviews });
   const paths = files.flatMap(({ filename, previous_filename }) => [filename, previous_filename].filter(Boolean));
   if (['commented', 'never'].includes(verdict) && paths.length) {
-    const needed = [...new Set([repoOwner, ...reviewOwners(process.env.REVIEW_OWNERS ?? '').filter(({ pattern }) => paths.some((path) => pattern.test(path))).flatMap(({ owners }) => owners)])].filter((login) => login !== author);
+    const extraRules = parseCodeOwners(process.env.REVIEW_OWNERS ?? '');
+    const needed = [...new Set([repoOwner, ...paths.flatMap((path) => ownersOf(extraRules, path) ?? [])])].filter((login) => login !== author);
     if (!needed.length) {
       return ['success', 'No owner review needed', [], reviews];
     }
@@ -93,7 +98,7 @@ async function evaluate({ github, context, pr }) {
     return ['pending', 'Waiting for the requested Copilot review', [], reviews];
   }
   const rules = await readCodeOwners(github, context.repo, pr.base.ref);
-  const needsReview = (path) => (rules.findLast(({ pattern }) => pattern.test(path))?.owners ?? [repoOwner]).some((handle) => handle !== author);
+  const needsReview = (path) => (ownersOf(rules, path) ?? [repoOwner]).some((handle) => handle !== author);
   if (!files.some(({ filename, previous_filename }) => [filename, previous_filename].some((path) => path && needsReview(path)))) {
     return ['success', 'No code owner review needed', []];
   }
