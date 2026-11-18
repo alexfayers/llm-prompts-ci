@@ -52,6 +52,7 @@ jobs:
           REPO: ${{ inputs.repo }}
           RELEASE_TAG: ${{ steps.release-please.outputs.tag_name }}
         with:
+          retries: 3
           github-token: ${{ steps.releaser.outputs.token }}
           script: |
             const { thank } = require('./.shared-automation/.github/scripts/release/thanks.js')
