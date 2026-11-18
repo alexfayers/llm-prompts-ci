@@ -1,8 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { gate } = require('./codeowner-review.js');
 
-process.env.REVIEW_OWNERS = '^prompts/ alice bob';
+process.env.REVIEW_OWNERS = '/prompts/ @alice bob';
 
 const CODEOWNERS = '*.md @Owner\n/src/*/prompts/**/rules/ @Owner @friend\n/src/*/prompts/**/skills/ @Owner @friend\n/src/*/prompts/**/skills/pi-help/ @Owner\n/src/*/prompts/**/rules/hooks*.md @Owner\na**b/ @friend\na?c @friend\n';
 
@@ -264,19 +266,46 @@ test('a min-reviews label raises the owner approvals a commented PR needs and as
   }
 });
 
-test('review-owners lines add the owners of every line matching a changed path', async () => {
+test('the last review-owners line matching a changed path names its owners', async () => {
   const saved = process.env.REVIEW_OWNERS;
-  process.env.REVIEW_OWNERS = `${saved}\n\n^docs/ Carol owner\n^docs/a dave carol\n`;
+  process.env.REVIEW_OWNERS = `${saved}\n\n/docs/ Carol owner\n/docs/a* @dave carol\n/docs/private/\n/docs/c* @org/team erin@example.com frank\n`;
   try {
     for (const [author, files, requested] of [
-      ['stranger', ['docs/a.md'], ['owner', 'carol', 'dave']],
+      ['stranger', ['docs/a.md'], ['owner', 'dave', 'carol']],
       ['carol', ['docs/b.md'], ['owner']],
+      ['stranger', ['docs/private/a.md'], ['owner']],
+      ['stranger', ['docs/c.md'], ['owner', 'frank']],
       ['stranger', ['README.md'], ['owner']],
       ['stranger', [OWNED_FILE, 'docs/b.md'], ['owner', 'alice', 'bob', 'carol']],
     ]) {
       const f = fixture({ author, files, ...COPILOT_COMMENTED });
       await gate(f);
       assert.deepEqual(f.requests, [[7, requested]], `${author} ${files}`);
+    }
+  } finally {
+    process.env.REVIEW_OWNERS = saved;
+  }
+});
+
+test('the default review-owners names the prompt owners for shared rules, skills, workflows and agents, but not pi or hooks paths', async () => {
+  const saved = process.env.REVIEW_OWNERS;
+  const lines = fs.readFileSync(path.join(__dirname, '../../workflows/pr-automation.yml'), 'utf8').split('\n');
+  const indent = (line) => line.search(/\S/);
+  const start = lines.findIndex((line, i) => line.trim() === 'default: |' && lines[lines.findLastIndex((l, j) => j < i && indent(l) < indent(line))].trim() === 'review-owners:');
+  const end = lines.findIndex((line, i) => i > start && line.trim() && indent(line) <= indent(lines[start]));
+  process.env.REVIEW_OWNERS = lines.slice(start + 1, end).join('\n');
+  try {
+    for (const [file, matches] of [
+      ['src/a/prompts/shared/rules/x.md', true],
+      ['src/a/prompts/pi/rules/x.md', false],
+      ['src/a/prompts/pi/skills/pi-help/S.md', false],
+      ['src/a/prompts/shared/rules/hooks-x.md', false],
+      ['src/a/prompts/claude-code/agents/a.md', true],
+      ['README.md', false],
+    ]) {
+      const f = fixture({ author: 'stranger', files: [file], ...COPILOT_COMMENTED });
+      await gate(f);
+      assert.deepEqual(f.requests, [[7, matches ? ['owner', 'codebeetl', 'unkokaeru'] : ['owner']]], file);
     }
   } finally {
     process.env.REVIEW_OWNERS = saved;
