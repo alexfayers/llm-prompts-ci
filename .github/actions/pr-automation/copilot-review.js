@@ -124,6 +124,10 @@ async function waitForReview({ github, context, delay = sleep }) {
     if (pr.state !== 'open' || pr.draft || pr.head.sha !== pull_request.head.sha) {
       return false;
     }
+    if (!waited) {
+      await setStatus(github, context, pull_request, ...WAITING);
+      await require('./codeowner-review.js').setStatus(github, context, pull_request, ...WAITING);
+    }
     const reviews = await github.paginate(github.rest.pulls.listReviews, { ...context.repo, pull_number: pr.number, per_page: 100 });
     if (reviews.some((review) => isCopilotReview(review) && review.commit_id === pr.head.sha)) {
       return true;

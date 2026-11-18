@@ -178,4 +178,4 @@ async function gate({ github, context }) {
   }
 }
 
-module.exports = { gate };
+module.exports = { gate, setStatus };

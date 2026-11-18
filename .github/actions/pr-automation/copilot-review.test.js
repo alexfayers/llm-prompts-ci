@@ -121,14 +121,16 @@ test('a failed disable only warns and posts no comment', async () => {
 
 const wait = ({ requested = 'Copilot', polls }, expected, delays) => async () => {
   const waited = [];
+  const calls = [];
   let poll = {};
   const github = {
-    paginate: async () => poll.reviews ?? [],
-    rest: { pulls: { listReviews: {}, get: async () => { poll = polls.shift() ?? {}; return { data: { state: 'open', draft: false, head: { sha: 'abc' }, ...poll.pr } }; } } },
+    paginate: async () => calls.push('poll') && (poll.reviews ?? []),
+    rest: { repos: { createCommitStatus: async ({ sha, context, state }) => calls.push([sha, context, state]) }, pulls: { listReviews: {}, get: async () => { poll = polls.shift() ?? {}; return { data: { state: 'open', draft: false, head: { sha: 'abc' }, ...poll.pr } }; } } },
   };
   const context = { repo: { owner: 'owner', repo: 'r' }, payload: { requested_reviewer: { login: requested }, pull_request: { number: 7, head: { sha: 'abc' } } } };
   assert.equal(await waitForReview({ github, context, delay: async (ms) => waited.push(ms) }), expected);
   assert.equal(waited.length, delays);
+  return calls;
 };
 const copilotOn = (commit_id) => ({ user: { login: 'copilot-pull-request-reviewer[bot]' }, commit_id });
 
@@ -138,3 +140,7 @@ test('stops waiting once the PR has a new head commit', wait({ polls: [{}, { pr:
 test('gives up after ten minutes without a Copilot review', wait({ polls: [] }, false, 30));
 test('stops waiting once the PR is closed', wait({ polls: [{}, { pr: { state: 'closed' } }] }, false, 1));
 test('stops waiting once the PR is back in draft', wait({ polls: [{ pr: { draft: true } }] }, false, 0));
+test('holds both review checks pending before polling', async () => {
+  const calls = await wait({ polls: [{ reviews: [copilotOn('abc')] }] }, true, 0)();
+  assert.deepEqual(calls, [['abc', 'copilot-review', 'pending'], ['abc', 'codeowner-review', 'pending'], 'poll']);
+});

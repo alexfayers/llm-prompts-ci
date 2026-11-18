@@ -38,7 +38,7 @@ runs:
     - name: Codeowner review gate
       if: |
         (github.event_name == 'pull_request_target' && contains(fromJSON('["opened", "reopened", "synchronize", "ready_for_review", "converted_to_draft", "edited", "labeled", "unlabeled", "auto_merge_enabled"]'), github.event.action)) ||
-        steps.wait-copilot.outputs.reviewed == 'true' ||
+        (github.event_name == 'pull_request_target' && github.event.action == 'review_requested') ||
         (github.event_name == 'workflow_run' && contains(fromJSON('["CI", "PR review", "Copilot"]'), github.event.workflow_run.name))
       continue-on-error: true
       uses: actions/github-script@v9
