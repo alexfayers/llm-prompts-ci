@@ -12,6 +12,7 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
         AUTOMATION_TOKEN: ${{ inputs.automation-token }}
       with:
+        retries: 3
         script: |
           const { check } = require(`${process.env.ACTION_PATH}/check-dependencies.js`)
           await check({ github, context, core, getOctokit, token: process.env.AUTOMATION_TOKEN })

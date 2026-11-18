@@ -28,6 +28,7 @@ jobs:
       - if: steps.download.outcome == 'success'
         uses: actions/github-script@v9
         with:
+          retries: 3
           script: |
             const { reportForRun } = require('./.shared-automation/.github/scripts/benchmark-comment.js')
             await reportForRun({ github, context, core, dir: 'benchmark-artifact' })

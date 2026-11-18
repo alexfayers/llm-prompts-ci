@@ -7,6 +7,7 @@ runs:
       env:
         ACTION_PATH: ${{ github.action_path }}
       with:
+        retries: 3
         script: |
           const { check } = require(`${process.env.ACTION_PATH}/check-pr-template.js`)
           await check({ github, context, core })
