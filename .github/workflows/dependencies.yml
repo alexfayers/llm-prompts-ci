@@ -1,6 +1,13 @@
 name: Dependencies
 
 on:
+  pull_request_target:
+    types: [opened, edited, synchronize, closed, reopened]
+  issues:
+    types: [closed, reopened]
+  workflow_dispatch:
+  repository_dispatch:
+    types: [dependencies-recheck]
   workflow_call:
     secrets:
       CI_BOT_CLIENT_ID:
