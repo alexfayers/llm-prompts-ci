@@ -90,6 +90,31 @@ test('files no CODEOWNERS rule matches belong to the repo owner', async () => {
   }
 });
 
+test('a CODEOWNERS rule with only team or email owners belongs to the repo owner', async () => {
+  for (const [author, reviews, state] of [
+    ['owner', [], 'success'],
+    ['friend', [], 'pending'],
+    ['friend', [['owner', 'APPROVED']], 'success'],
+  ]) {
+    for (const file of ['team/x', 'mail/x']) {
+      const f = fixture({ author, files: [file], reviews, codeowners: '* @friend\nteam/ @org/team\nmail/ a@b.c\n' });
+      await gate(f);
+      assert.deepEqual(f.calls, [['abc', 'codeowner-review', state]], `${author} ${file} ${JSON.stringify(reviews)}`);
+    }
+  }
+});
+
+test('a CODEOWNERS rule mixing a login with a team owner also belongs to the repo owner', async () => {
+  for (const [reviews, state] of [
+    [[], 'pending'],
+    [[['owner', 'APPROVED']], 'success'],
+  ]) {
+    const f = fixture({ author: 'friend', files: ['mixed/x'], reviews, codeowners: 'mixed/ @friend @org/team\n' });
+    await gate(f);
+    assert.deepEqual(f.calls, [['abc', 'codeowner-review', state]], JSON.stringify(reviews));
+  }
+});
+
 test('a missing CODEOWNERS file leaves every file to the repo owner', async () => {
   for (const [author, reviews, state] of [
     ['owner', [], 'success'],
