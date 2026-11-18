@@ -9,10 +9,11 @@ on:
         type: boolean
         default: true
       review-owners:
-        description: Extra owners a PR Copilot did not approve needs. Each line is a path regex followed by the GitHub users who own matching paths.
+        description: Extra owners a PR Copilot did not approve needs. Each line is a path regex followed by the GitHub users who own matching paths. Defaults to the prompt owners for shared prompt rules, skills, workflows and agents.
         required: false
         type: string
-        default: ''
+        default: |
+          ^src/[^/]+/prompts/(?!pi/)(?:.+/)?(?:rules/(?!hooks[^/]*\.md$)|skills/(?!pi-help/)|workflows/|agents/) codebeetl unkokaeru
     secrets:
       CI_BOT_CLIENT_ID:
         required: false
