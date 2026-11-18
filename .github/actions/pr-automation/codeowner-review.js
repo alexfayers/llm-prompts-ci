@@ -36,15 +36,18 @@ async function readCodeOwners(github, { owner, repo }, ref) {
     if (error.status === 404) return [];
     throw error;
   }
-  return parseCodeOwners(Buffer.from(data.content, 'base64').toString());
+  return parseCodeOwners(Buffer.from(data.content, 'base64').toString(), owner.toLowerCase());
 }
 
-function parseCodeOwners(text) {
+function parseCodeOwners(text, repoOwner) {
   return text.split('\n')
     .map((line) => line.replace(/#.*/, '').trim())
     .filter(Boolean)
     .map((line) => line.split(/\s+/))
-    .map(([pattern, ...owners]) => ({ pattern: patternToRegExp(pattern), owners: owners.filter((handle) => /^@?[\w-]+$/.test(handle)).map((handle) => handle.replace(/^@/, '').toLowerCase()) }));
+    .map(([pattern, ...owners]) => {
+      const logins = owners.filter((handle) => /^@?[\w-]+$/.test(handle)).map((handle) => handle.replace(/^@/, '').toLowerCase());
+      return { pattern: patternToRegExp(pattern), owners: logins.length < owners.length ? [...new Set([...logins, repoOwner])] : logins };
+    });
 }
 
 function ownersOf(rules, path) {
@@ -88,7 +91,7 @@ async function evaluate({ github, context, pr }) {
   const verdict = await copilotVerdict({ github, context, pr, reviews });
   const paths = files.flatMap(({ filename, previous_filename }) => [filename, previous_filename].filter(Boolean));
   if (['commented', 'never'].includes(verdict) && paths.length) {
-    const extraRules = parseCodeOwners(process.env.REVIEW_OWNERS ?? '');
+    const extraRules = parseCodeOwners(process.env.REVIEW_OWNERS ?? '', repoOwner);
     const needed = [...new Set([repoOwner, ...paths.flatMap((path) => ownersOf(extraRules, path) ?? [])])].filter((login) => login !== author);
     if (!needed.length) {
       return ['success', 'No owner review needed', [], reviews];
