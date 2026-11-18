@@ -81,10 +81,10 @@ test('a manual run rechecks open PRs that are blocked or pending and skips the r
   assert.deepEqual(calls, [['status', 'sha1', 'success'], ['removeLabel', 'blocked'], ['status', 'sha2', 'success']]);
 });
 
-test('closing a PR rechecks the open same-repo PRs that depend on it', async () => {
+for (const action of ['closed', 'reopened']) test(`a ${action} PR rechecks the open same-repo PRs that depend on it`, async () => {
   const pull = (number, body) => ({ number, head: { sha: `sha${number}` }, body, labels: [] });
   const { github, context, core, calls } = fixture({ body: 'Merged work' });
-  context.payload.action = 'closed';
+  context.payload.action = action;
   context.payload.pull_request.number = 5;
   github.paginate = async () => [pull(6, 'Depends on #5'), pull(7, 'Depends on a/b#5'), pull(8, 'Depends on o/r#4')];
   github.rest.repos.createCommitStatus = async ({ sha, state }) => calls.push(['status', sha, state]);
@@ -113,8 +113,9 @@ function closedFixture() {
 
 const item = (slug, body) => ({ repository_url: `https://api.github.com/repos/${slug}`, body });
 
-test('closing a PR dispatches a recheck to other repos whose open PRs depend on it by shorthand or URL', async () => {
+for (const action of ['closed', 'reopened']) test(`a ${action} PR dispatches a recheck to other repos whose open PRs depend on it by shorthand or URL`, async () => {
   const { github, context, core, calls } = closedFixture();
+  context.payload.action = action;
   const client = searchClient(calls, {
     '"o/r#5" is:pr is:open user:o in:body': [item('o/x', 'Depends on o/r#5'), item('o/y', 'Depends on #5'), item('o/r', 'Depends on o/r#5')],
     '"https://github.com/o/r/pull/5" is:pr is:open user:o in:body': [item('o/z', 'blocked by https://github.com/o/r/pull/5')],

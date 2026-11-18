@@ -3,6 +3,7 @@ const { findPullRequest } = require('../pr-automation/sync-project-status.js');
 const { DEPENDENCIES_CONTEXT, dependenciesPending, fetchPr, requiredCheckFailed, clearsBlock } = require('../pr-automation/label-conflicts.js');
 
 const DISPATCH_EVENT = 'dependencies-recheck';
+const STATE_CHANGES = ['closed', 'reopened'];
 const DEPENDENCY = /(?:depends on|blocked by)\s+(?:https:\/\/github\.com\/)?([\w.-]+\/[\w.-]+)?(?:#|\/(?:pull|issues)\/)(\d+)/gi;
 
 async function setStatus(github, context, pr, state, description) {
@@ -63,7 +64,7 @@ async function pullsToCheck({ github, context }) {
   if (run) {
     return [await findPullRequest(github, context)].filter(Boolean);
   }
-  if (event && action !== 'closed') {
+  if (event && !STATE_CHANGES.includes(action)) {
     return [event];
   }
   const pulls = await github.paginate(github.rest.pulls.list, { ...context.repo, state: 'open' });
@@ -119,7 +120,7 @@ async function check({ github, context, core, getOctokit, token, delay = (ms) =>
       failure ??= error;
     }
   }
-  if (token && (context.payload.issue || context.payload.action === 'closed')) {
+  if (token && (context.payload.issue || STATE_CHANGES.includes(context.payload.action))) {
     await dispatchCrossRepoDependents({ context, core, client: removeClient });
   }
   if (failure) {
