@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { gate, holdAutoMerge } = require('./copilot-review.js');
+const { gate, holdAutoMerge, waitForReview } = require('./copilot-review.js');
 
 function fixture({ requested = [], events = [], reviews = [] } = {}) {
   const calls = [];
@@ -84,3 +84,23 @@ test('a failed disable only warns and posts no comment', async () => {
   assert.deepEqual(f.calls, []);
   assert.deepEqual(f.warnings, ['Failed to disable auto-merge: denied']);
 });
+
+const wait = ({ requested = 'Copilot', polls }, expected, delays) => async () => {
+  const waited = [];
+  let poll = {};
+  const github = {
+    paginate: async () => poll.reviews ?? [],
+    rest: { pulls: { listReviews: {}, get: async () => { poll = polls.shift() ?? {}; return { data: { state: 'open', draft: false, head: { sha: 'abc' }, ...poll.pr } }; } } },
+  };
+  const context = { repo: { owner: 'owner', repo: 'r' }, payload: { requested_reviewer: { login: requested }, pull_request: { number: 7, head: { sha: 'abc' } } } };
+  assert.equal(await waitForReview({ github, context, delay: async (ms) => waited.push(ms) }), expected);
+  assert.equal(waited.length, delays);
+};
+const copilotOn = (commit_id) => ({ user: { login: 'copilot-pull-request-reviewer[bot]' }, commit_id });
+
+test('a review request for someone else does not wait', wait({ requested: 'owner', polls: [] }, false, 0));
+test('waits until Copilot reviews the current head commit', wait({ polls: [{}, { reviews: [copilotOn('old')] }, { reviews: [copilotOn('abc')] }] }, true, 2));
+test('stops waiting once the PR has a new head commit', wait({ polls: [{}, { pr: { head: { sha: 'new' } }, reviews: [copilotOn('new')] }] }, false, 1));
+test('gives up after ten minutes without a Copilot review', wait({ polls: [] }, false, 30));
+test('stops waiting once the PR is closed', wait({ polls: [{}, { pr: { state: 'closed' } }] }, false, 1));
+test('stops waiting once the PR is back in draft', wait({ polls: [{ pr: { draft: true } }] }, false, 0));

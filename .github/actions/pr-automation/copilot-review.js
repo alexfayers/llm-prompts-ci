@@ -4,6 +4,8 @@ const STATUS_CONTEXT = 'copilot-review';
 const COPILOT_LOGINS = ['copilot', 'copilot-pull-request-reviewer[bot]'];
 
 const HOLD_MARKER = 'copilot-review-hold';
+const POLL_MS = 20_000;
+const WAIT_MS = 600_000;
 
 const DISABLE_AUTO_MERGE = `mutation($id: ID!) {
   disablePullRequestAutoMerge(input: {pullRequestId: $id}) {
@@ -82,4 +84,23 @@ async function holdAutoMerge({ github, context, core }) {
   });
 }
 
-module.exports = { gate, holdAutoMerge, copilotRequested, isCopilot, isCopilotReview };
+async function waitForReview({ github, context, delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
+  const { requested_reviewer, pull_request } = context.payload;
+  if (!isCopilot(requested_reviewer)) {
+    return false;
+  }
+  for (let waited = 0; waited < WAIT_MS; waited += POLL_MS) {
+    const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: pull_request.number });
+    if (pr.state !== 'open' || pr.draft || pr.head.sha !== pull_request.head.sha) {
+      return false;
+    }
+    const reviews = await github.paginate(github.rest.pulls.listReviews, { ...context.repo, pull_number: pr.number, per_page: 100 });
+    if (reviews.some((review) => isCopilotReview(review) && review.commit_id === pr.head.sha)) {
+      return true;
+    }
+    await delay(POLL_MS);
+  }
+  return false;
+}
+
+module.exports = { gate, holdAutoMerge, waitForReview, copilotRequested, isCopilot, isCopilotReview };

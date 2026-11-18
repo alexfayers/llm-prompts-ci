@@ -100,10 +100,24 @@ runs:
           const { labelConflicts } = require(`${process.env.ACTION_PATH}/label-conflicts.js`)
           await labelConflicts({ github, removeClient: getOctokit(process.env.AUTOMATION_TOKEN), context, core })
 
+    - name: Wait for a requested Copilot review
+      id: wait-copilot
+      if: github.event_name == 'pull_request_target' && github.event.action == 'review_requested'
+      continue-on-error: true
+      uses: actions/github-script@v9
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const { waitForReview } = require(`${process.env.ACTION_PATH}/copilot-review.js`)
+          core.setOutput('reviewed', await waitForReview({ github, context }))
+
     - name: Codeowner review gate
       if: |
         (github.event_name == 'pull_request_target' && contains(fromJSON('["opened", "reopened", "synchronize", "ready_for_review", "converted_to_draft", "edited", "labeled", "unlabeled", "auto_merge_enabled"]'), github.event.action)) ||
-        (github.event_name == 'workflow_run' && contains(fromJSON('["CI", "PR review"]'), github.event.workflow_run.name))
+        steps.wait-copilot.outputs.reviewed == 'true' ||
+        (github.event_name == 'workflow_run' && contains(fromJSON('["CI", "PR review", "Copilot"]'), github.event.workflow_run.name))
       uses: actions/github-script@v9
       env:
         ACTION_PATH: ${{ github.action_path }}
@@ -115,7 +129,7 @@ runs:
           await gate({ github, context })
 
     - name: Hold auto-merge on a Copilot review without approval
-      if: github.event_name == 'workflow_run' && github.event.workflow_run.name == 'PR review'
+      if: steps.wait-copilot.outputs.reviewed == 'true' || (github.event_name == 'workflow_run' && contains(fromJSON('["PR review", "Copilot"]'), github.event.workflow_run.name))
       uses: actions/github-script@v9
       env:
         ACTION_PATH: ${{ github.action_path }}
@@ -128,7 +142,7 @@ runs:
     - name: Copilot review gate
       if: |
         (github.event_name == 'pull_request_target' && contains(fromJSON('["opened", "reopened", "synchronize", "ready_for_review", "review_requested", "review_request_removed", "auto_merge_enabled"]'), github.event.action)) ||
-        (github.event_name == 'workflow_run' && github.event.workflow_run.name == 'PR review')
+        (github.event_name == 'workflow_run' && contains(fromJSON('["PR review", "Copilot"]'), github.event.workflow_run.name))
       uses: actions/github-script@v9
       env:
         ACTION_PATH: ${{ github.action_path }}
@@ -146,6 +160,7 @@ runs:
         ((github.event_name == 'pull_request_target' &&
           (contains(fromJSON('["opened", "reopened", "synchronize", "closed", "ready_for_review", "converted_to_draft"]'), github.event.action) ||
           (contains(fromJSON('["labeled", "unlabeled"]'), github.event.action) && startsWith(github.event.label.name, 'min-reviews:')))) ||
+        steps.wait-copilot.outputs.reviewed == 'true' ||
         (github.event_name == 'workflow_run' && github.event.workflow_run.name == 'PR review'))
       uses: actions/github-script@v9
       env:
@@ -160,6 +175,7 @@ runs:
       id: label-auto-rebase
       if: |
         (github.event_name == 'pull_request_target' && contains(fromJSON('["opened", "reopened", "synchronize", "ready_for_review", "edited", "auto_merge_enabled"]'), github.event.action)) ||
+        steps.wait-copilot.outputs.reviewed == 'true' ||
         (github.event_name == 'workflow_run' && github.event.workflow_run.name == 'PR review')
       uses: actions/github-script@v9
       env:
