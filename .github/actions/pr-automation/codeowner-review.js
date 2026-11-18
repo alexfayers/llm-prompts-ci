@@ -1,5 +1,5 @@
 const { findPullRequest } = require('./sync-project-status.js');
-const { copilotRequested, isCopilot, isCopilotReview } = require('./copilot-review.js');
+const { copilotHold, isCopilotReview } = require('./copilot-review.js');
 
 const STATUS_CONTEXT = 'codeowner-review';
 const SAFE_BOT_BRANCHES = {
@@ -64,11 +64,10 @@ function latestReviewStates(reviews) {
   return states;
 }
 
-/** Copilot's verdict: 'approved' (approved, or its latest review left no comments or only low-severity findings), 'commented', 'pending' (requested, not reviewed) or 'never'. */
+/** Copilot's verdict: 'approved' (approved, or its latest review left no comments or only low-severity findings), 'commented' or 'never'. */
 async function copilotVerdict({ github, context, pr, reviews }) {
   const latest = reviews.filter(isCopilotReview).at(-1);
-  if (!latest) return (await copilotRequested(github, context, pr)) ? 'pending' : 'never';
-  if (latest.commit_id !== pr.head.sha) return pr.requested_reviewers?.some(isCopilot) ? 'pending' : 'never';
+  if (latest?.commit_id !== pr.head.sha) return 'never';
   if (latest.state !== 'COMMENTED') return latest.state === 'APPROVED' ? 'approved' : 'commented';
   const comments = await github.paginate(github.rest.pulls.listCommentsForReview, { ...context.repo, pull_number: pr.number, review_id: latest.id, per_page: 100 });
   const body = latest.body ?? '';
@@ -78,10 +77,12 @@ async function copilotVerdict({ github, context, pr, reviews }) {
   return (comments.length && !lowOnly) || severities.some((severity) => severity !== 'Low') ? 'commented' : 'approved';
 }
 
+const isSafeBotPr = (pr) => Object.hasOwn(SAFE_BOT_BRANCHES, pr.user.login) && SAFE_BOT_BRANCHES[pr.user.login].includes(pr.head.ref);
+
 /** Returns [state, description, owners to ask, reviews, min-reviews applied]: the owners only when the gate or min-reviews should request them. */
 async function evaluate({ github, context, pr }) {
   const { owner, repo } = context.repo;
-  if (Object.hasOwn(SAFE_BOT_BRANCHES, pr.user.login) && SAFE_BOT_BRANCHES[pr.user.login].includes(pr.head.ref)) {
+  if (isSafeBotPr(pr)) {
     return ['success', 'Bot PR needs no code owner review', []];
   }
   const author = pr.user.login.toLowerCase();
@@ -100,9 +101,6 @@ async function evaluate({ github, context, pr }) {
     const ask = verdict === 'commented' || context.eventName === 'workflow_run';
     const count = Math.max(1, minReviews(pr.labels ?? []));
     return [...ownerVerdict(reviews, needed, author, count > 1 ? `Needs ${count} owner approvals` : 'Needs an owner approval', count), ask ? needed : [], reviews, true];
-  }
-  if (verdict === 'pending') {
-    return ['pending', 'Waiting for the requested Copilot review', [], reviews];
   }
   const rules = await readCodeOwners(github, context.repo, pr.base.ref);
   const needsReview = (path) => (ownersOf(rules, path) ?? [repoOwner]).some((handle) => handle !== author);
@@ -158,7 +156,7 @@ async function requestOwners({ github, context, pr, owners, reviews }) {
   }
 }
 
-async function gate({ github, context }) {
+async function gate({ github, context, delay }) {
   const pr = await findPullRequest(github, context);
   if (!pr) {
     return;
@@ -166,6 +164,13 @@ async function gate({ github, context }) {
   let result;
   let required;
   try {
+    const hold = isSafeBotPr(pr) ? [] : await copilotHold({ github, context, pr, delay, setPending: (description) => setStatus(github, context, pr, 'pending', description) });
+    if (hold?.length) {
+      await setStatus(github, context, pr, ...hold);
+    }
+    if (!hold || hold.length) {
+      return;
+    }
     result = await evaluate({ github, context, pr });
     required = result[0] === 'success' && !result[4] ? await evaluateMinReviews({ github, context, pr }) : null;
     await setStatus(github, context, pr, ...(required ?? result.slice(0, 2)));

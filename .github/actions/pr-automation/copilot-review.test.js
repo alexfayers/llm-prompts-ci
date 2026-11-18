@@ -1,76 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { gate, holdAutoMerge, waitForReview } = require('./copilot-review.js');
-
-function fixture({ requested = [], events = [], reviews = [], suites = [], draft = false, createdAt = '2020-01-01T00:00:00Z' } = {}) {
-  const calls = [];
-  const live = { number: 7, draft, created_at: createdAt, requested_reviewers: requested.map((login) => ({ login })), head: { sha: 'abc' } };
-  const github = {
-    paginate: async (method) => method.items,
-    rest: {
-      issues: { listEventsForTimeline: { items: events.map(([event, login, created_at]) => ({ event, [event === 'reviewed' ? 'user' : 'requested_reviewer']: { login }, created_at })) } },
-      pulls: { listReviews: { items: reviews.map(([login, copilot, commit_id = 'abc']) => ({ user: { login }, is_copilot_code_review: copilot, commit_id })) }, get: async () => ({ data: structuredClone(live) }) },
-      checks: { listSuitesForRef: { items: suites.map((created_at) => ({ created_at })) } },
-      repos: { createCommitStatus: async ({ sha, context, state }) => calls.push([sha, context, state]) },
-    },
-  };
-  const context = { repo: { owner: 'owner', repo: 'r' }, payload: { pull_request: structuredClone(live) } };
-  return { github, context, calls, live };
-}
-
-const expect = (state, options) => async () => {
-  const f = fixture(options);
-  await gate(f);
-  assert.deepEqual(f.calls, [['abc', 'copilot-review', state]]);
-};
-
-test('passes when no Copilot review was requested', expect('success', { events: [['review_requested', 'owner']] }));
-test('waits while Copilot is a requested reviewer', expect('pending', { requested: ['Copilot'] }));
-test('waits after a Copilot review request the reviewer list no longer shows', expect('pending', { events: [['review_requested', 'Copilot']] }));
-test('passes once the Copilot request was removed', expect('success', { events: [['review_requested', 'Copilot'], ['review_request_removed', 'Copilot']] }));
-test('passes once Copilot has submitted a review', expect('success', { requested: ['Copilot'], reviews: [['copilot-pull-request-reviewer[bot]', true]] }));
-test('a human review does not count as the Copilot review', expect('pending', { events: [['review_requested', 'Copilot']], reviews: [['friend', false]] }));
-
-test('waits while the PR is a draft', expect('pending', { draft: true }));
-
-const ready = (requestOnCheck, states, options = { createdAt: new Date().toISOString() }, change = () => {}) => async () => {
-  const f = fixture(options);
-  let checks = 0;
-  const delay = async () => {
-    f.live.created_at = '2020-01-01T00:00:00Z';
-    [...f.github.rest.issues.listEventsForTimeline.items, ...f.github.rest.checks.listSuitesForRef.items].forEach((item) => (item.created_at = '2020-01-01T00:00:00Z'));
-    change(f.live);
-    if (++checks === requestOnCheck) {
-      f.github.rest.issues.listEventsForTimeline.items = [{ event: 'review_requested', requested_reviewer: { login: 'Copilot' } }];
-    }
-  };
-  await gate({ ...f, delay });
-  assert.deepEqual(f.calls.map(([, , state]) => state), states);
-};
-
-test('a ready PR waits for a Copilot review request that comes later', ready(2, ['pending', 'pending']));
-test('a ready PR passes once no Copilot review request comes', ready(0, ['pending', 'success']));
-
-test('a run soon after the PR became ready waits out the rest of the window', ready(0, ['pending', 'success'], { events: [['ready_for_review', undefined, new Date().toISOString()]] }));
-test('a run soon after the PR reopened waits out the rest of the window', ready(0, ['pending', 'success'], { events: [['ready_for_review', undefined, '2020-01-01T00:00:00Z'], ['reopened', undefined, new Date().toISOString()]] }));
-test('a push to a PR ready for long waits for a Copilot review request on the new head', ready(0, ['pending', 'success'], { events: [['ready_for_review', undefined, '2020-01-01T00:00:00Z']], suites: [new Date().toISOString()] }));
-test('a head first seen long ago passes without waiting', expect('success', { suites: ['2020-01-01T00:00:00Z', new Date().toISOString()] }));
-const stale = { createdAt: new Date().toISOString(), reviews: [['copilot-pull-request-reviewer[bot]', true, 'old']] };
-test('a Copilot review on an older head does not pass a ready PR', ready(0, ['pending', 'success'], stale));
-test('a Copilot review request an older review answered does not count', ready(0, ['pending', 'success'], { ...stale, events: [['review_requested', 'Copilot'], ['reviewed', 'Copilot']] }));
-test('a Copilot review request after its older review waits for the new review', expect('pending', { ...stale, events: [['review_requested', 'Copilot'], ['reviewed', 'Copilot'], ['review_requested', 'Copilot']] }));
-test('a PR converted to draft during the wait stays pending', ready(0, ['pending', 'pending'], undefined, (live) => (live.draft = true)));
-test('a PR pushed to during the wait gets no final status on the old head', ready(0, ['pending'], undefined, (live) => (live.head.sha = 'def')));
-test('a ready PR passes once the wait for a Copilot review request is over', expect('success', { events: [['ready_for_review', undefined, '2020-01-01T00:00:00Z']] }));
-
-test('reports an error status when the check fails to run', async () => {
-  const f = fixture();
-  f.github.paginate = async () => {
-    throw new Error('boom');
-  };
-  await assert.rejects(gate(f), /boom/);
-  assert.deepEqual(f.calls, [['abc', 'copilot-review', 'error']]);
-});
+const { holdAutoMerge, waitForReview } = require('./copilot-review.js');
 
 function holdFixture({ autoMerge = true, reviews = [], inline = [], issueComments = [], graphqlError } = {}) {
   const calls = [];
@@ -140,7 +70,7 @@ test('stops waiting once the PR has a new head commit', wait({ polls: [{}, { pr:
 test('gives up after ten minutes without a Copilot review', wait({ polls: [] }, false, 30));
 test('stops waiting once the PR is closed', wait({ polls: [{}, { pr: { state: 'closed' } }] }, false, 1));
 test('stops waiting once the PR is back in draft', wait({ polls: [{ pr: { draft: true } }] }, false, 0));
-test('holds both review checks pending before polling', async () => {
+test('holds the review check pending before polling', async () => {
   const calls = await wait({ polls: [{ reviews: [copilotOn('abc')] }] }, true, 0)();
-  assert.deepEqual(calls, [['abc', 'copilot-review', 'pending'], ['abc', 'codeowner-review', 'pending'], 'poll']);
+  assert.deepEqual(calls, [['abc', 'codeowner-review', 'pending'], 'poll']);
 });

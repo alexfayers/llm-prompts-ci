@@ -10,14 +10,16 @@ const CODEOWNERS = '*.md @Owner\n/src/*/prompts/**/rules/ @Owner @friend\n/src/*
 
 const COPILOT_NO_COMMENTS = ['copilot-pull-request-reviewer[bot]', 'COMMENTED', true];
 
-function fixture({ author, files, reviews = [], labels = [], branch = 'feature', requested = [], draft = false, permission = 'none', codeowners = CODEOWNERS, timeline = [], copilotComments = [], eventName = 'pull_request_target', copilotApproved = true }) {
+function fixture({ author, files, reviews = [], labels = [], branch = 'feature', requested = [], draft = false, permission = 'none', codeowners = CODEOWNERS, events = [], suites = [], createdAt = '2020-01-01T00:00:00Z', copilotComments = [], eventName = 'pull_request_target', copilotApproved = true }) {
   reviews = [...(copilotApproved ? [COPILOT_NO_COMMENTS] : []), ...reviews];
   const calls = [];
   const requests = [];
+  const live = { number: 7, user: { login: author }, labels: labels.map((name) => ({ name })), draft, created_at: createdAt, requested_reviewers: requested.map((login) => ({ login })), requested_teams: [], head: { sha: 'abc', ref: branch }, base: { ref: 'main' } };
   const github = {
     paginate: async (method) => method.items,
     rest: {
-      pulls: { listFiles: { items: files.map((file) => (typeof file === 'string' ? { filename: file } : file)) }, listReviews: { items: reviews.map(([login, state, copilot, commit_id = 'abc', body = ''], id) => ({ id, user: { login }, state, is_copilot_code_review: copilot, commit_id, body })) }, listCommentsForReview: { items: copilotComments }, requestReviewers: async ({ pull_number, reviewers }) => requests.push([pull_number, reviewers]) },
+      pulls: { listFiles: { items: files.map((file) => (typeof file === 'string' ? { filename: file } : file)) }, listReviews: { items: reviews.map(([login, state, copilot, commit_id = 'abc', body = ''], id) => ({ id, user: { login }, state, is_copilot_code_review: copilot, commit_id, body })) }, listCommentsForReview: { items: copilotComments }, requestReviewers: async ({ pull_number, reviewers }) => requests.push([pull_number, reviewers]), get: async () => ({ data: structuredClone(live) }) },
+      checks: { listSuitesForRef: { items: suites.map((created_at) => ({ created_at })) } },
       repos: {
         getContent: async ({ path, ref }) => {
           if (codeowners === null) throw Object.assign(new Error('Not Found'), { status: 404 });
@@ -26,11 +28,11 @@ function fixture({ author, files, reviews = [], labels = [], branch = 'feature',
         createCommitStatus: async ({ sha, context, state }) => calls.push([sha, context, state]),
         getCollaboratorPermissionLevel: async () => ({ data: { permission } }),
       },
-      issues: { listEventsForTimeline: { items: timeline } },
+      issues: { listEventsForTimeline: { items: events.map(([event, login, created_at]) => ({ event, [event === 'reviewed' ? 'user' : 'requested_reviewer']: { login }, created_at })) } },
     },
   };
-  const context = { eventName, repo: { owner: 'owner', repo: 'r' }, payload: { pull_request: { number: 7, user: { login: author }, labels: labels.map((name) => ({ name })), draft, requested_reviewers: requested.map((login) => ({ login })), requested_teams: [], head: { sha: 'abc', ref: branch }, base: { ref: 'main' } } } };
-  return { github, context, calls, requests };
+  const context = { eventName, repo: { owner: 'owner', repo: 'r' }, payload: { pull_request: structuredClone(live) } };
+  return { github, context, calls, requests, live };
 }
 
 const PROMPT_FILE = 'src/llm_prompts/prompts/shared/rules/a.md';
@@ -394,7 +396,7 @@ test('a Copilot approval of an older commit needs the owners', async () => {
 });
 
 test('a Copilot review requested again after an old-commit approval holds even the repo owner own PR', async () => {
-  const f = fixture({ author: 'owner', files: ['src/llm_prompts/cli.py'], reviews: [['copilot-pull-request-reviewer[bot]', 'APPROVED', true, 'old']], requested: ['Copilot'] });
+  const f = fixture({ author: 'owner', files: ['src/llm_prompts/cli.py'], reviews: [['copilot-pull-request-reviewer[bot]', 'APPROVED', true, 'old']], requested: ['Copilot'], copilotApproved: false });
   await gate(f);
   assert.deepEqual([f.calls, f.requests], [[['abc', 'codeowner-review', 'pending']], []]);
 });
@@ -404,3 +406,55 @@ test('a Copilot-approved collaborator PR waiting on min-reviews asks the repo ow
   await gate(f);
   assert.deepEqual([f.calls, f.requests], [[['abc', 'codeowner-review', 'pending']], [[7, ['owner']]]]);
 });
+
+const COPILOT = 'copilot-pull-request-reviewer[bot]';
+const copilotHold = (options) => fixture({ author: 'owner', files: ['src/llm_prompts/cli.py'], copilotApproved: false, ...options });
+const expect = (state, options) => async () => {
+  const f = copilotHold(options);
+  await gate(f);
+  assert.deepEqual([f.calls, f.requests], [[['abc', 'codeowner-review', state]], []]);
+};
+
+test('passes when no Copilot review was requested', expect('success', { events: [['review_requested', 'owner']] }));
+test('waits while Copilot is a requested reviewer', expect('pending', { requested: ['Copilot'] }));
+test('waits after a Copilot review request the reviewer list no longer shows', expect('pending', { events: [['review_requested', 'Copilot']] }));
+test('passes once the Copilot request was removed', expect('success', { events: [['review_requested', 'Copilot'], ['review_request_removed', 'Copilot']] }));
+test('passes once Copilot has submitted a review', expect('success', { requested: ['Copilot'], reviews: [[COPILOT, 'COMMENTED', true]] }));
+test('a human review does not count as the Copilot review', expect('pending', { events: [['review_requested', 'Copilot']], reviews: [['friend', 'COMMENTED']] }));
+test('waits while the PR is a draft', expect('pending', { draft: true }));
+test('a draft PR waits even when Copilot approved and the owner needs no review', expect('pending', { draft: true, copilotApproved: true }));
+test('a stranger PR waiting for the requested Copilot review asks no owner', async () => {
+  const f = copilotHold({ author: 'stranger', requested: ['Copilot'], eventName: 'workflow_run' });
+  await gate(f);
+  assert.deepEqual([f.calls, f.requests], [[['abc', 'codeowner-review', 'pending']], []]);
+});
+
+const ready = (requestOnCheck, states, options = { createdAt: new Date().toISOString() }, change = () => {}) => async () => {
+  const f = copilotHold(options);
+  let checks = 0;
+  const delay = async () => {
+    f.live.created_at = '2020-01-01T00:00:00Z';
+    [...f.github.rest.issues.listEventsForTimeline.items, ...f.github.rest.checks.listSuitesForRef.items].forEach((item) => (item.created_at = '2020-01-01T00:00:00Z'));
+    change(f.live);
+    if (++checks === requestOnCheck) {
+      f.github.rest.issues.listEventsForTimeline.items = [{ event: 'review_requested', requested_reviewer: { login: 'Copilot' } }];
+    }
+  };
+  await gate({ ...f, delay });
+  assert.deepEqual(f.calls.map(([, , state]) => state), states);
+};
+
+test('a ready PR waits for a Copilot review request that comes later', ready(2, ['pending', 'pending']));
+test('a ready PR passes once no Copilot review request comes', ready(0, ['pending', 'success']));
+test('a ready stranger PR waits for an owner once no Copilot review request comes', ready(0, ['pending', 'pending'], { author: 'stranger', createdAt: new Date().toISOString() }));
+test('a run soon after the PR became ready waits out the rest of the window', ready(0, ['pending', 'success'], { events: [['ready_for_review', undefined, new Date().toISOString()]] }));
+test('a run soon after the PR reopened waits out the rest of the window', ready(0, ['pending', 'success'], { events: [['ready_for_review', undefined, '2020-01-01T00:00:00Z'], ['reopened', undefined, new Date().toISOString()]] }));
+test('a push to a PR ready for long waits for a Copilot review request on the new head', ready(0, ['pending', 'success'], { events: [['ready_for_review', undefined, '2020-01-01T00:00:00Z']], suites: [new Date().toISOString()] }));
+test('a head first seen long ago passes without waiting', expect('success', { suites: ['2020-01-01T00:00:00Z', new Date().toISOString()] }));
+const stale = { createdAt: new Date().toISOString(), reviews: [[COPILOT, 'APPROVED', true, 'old']] };
+test('a Copilot review on an older head does not pass a ready PR', ready(0, ['pending', 'success'], stale));
+test('a Copilot review request an older review answered does not count', ready(0, ['pending', 'success'], { ...stale, events: [['review_requested', 'Copilot'], ['reviewed', 'Copilot']] }));
+test('a Copilot review request after its older review waits for the new review', expect('pending', { ...stale, events: [['review_requested', 'Copilot'], ['reviewed', 'Copilot'], ['review_requested', 'Copilot']] }));
+test('a PR converted to draft during the wait stays pending', ready(0, ['pending', 'pending'], undefined, (live) => (live.draft = true)));
+test('a PR pushed to during the wait gets no final status on the old head', ready(0, ['pending'], undefined, (live) => (live.head.sha = 'def')));
+test('a ready PR passes once the wait for a Copilot review request is over', expect('success', { events: [['ready_for_review', undefined, '2020-01-01T00:00:00Z']] }));
