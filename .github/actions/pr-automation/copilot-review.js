@@ -1,13 +1,11 @@
 const { findPullRequest } = require('./sync-project-status.js');
 
-const STATUS_CONTEXT = 'copilot-review';
 const COPILOT_LOGINS = ['copilot', 'copilot-pull-request-reviewer[bot]'];
 
 const HOLD_MARKER = 'copilot-review-hold';
 const REQUEST_WINDOW_MS = 60000;
 const REQUEST_DELAY_MS = 10000;
 const WAITING = ['pending', 'Waiting for the requested Copilot review'];
-const NOT_REQUESTED = ['success', 'No Copilot review requested'];
 const POLL_MS = 20_000;
 const WAIT_MS = 600_000;
 
@@ -17,27 +15,43 @@ const DISABLE_AUTO_MERGE = `mutation($id: ID!) {
   }
 }`;
 
+const REQUEST_COPILOT = `mutation($id: ID!) {
+  requestReviewsByLogin(input: {pullRequestId: $id, botLogins: ["copilot-pull-request-reviewer"], union: true}) {
+    clientMutationId
+  }
+}`;
+
 const isCopilot = (user) => COPILOT_LOGINS.includes(user?.login?.toLowerCase());
 const isCopilotReview = (review) => review.is_copilot_code_review || isCopilot(review.user);
+const isCopilotEvent = ({ event, requested_reviewer, user }) => (['review_requested', 'review_request_removed'].includes(event) && isCopilot(requested_reviewer)) || (event === 'reviewed' && isCopilot(user));
 
 async function copilotRequested(github, context, pr) {
   if (pr.requested_reviewers?.some(isCopilot)) {
     return true;
   }
   const events = await github.paginate(github.rest.issues.listEventsForTimeline, { ...context.repo, issue_number: pr.number, per_page: 100 });
-  const last = events.findLast(({ event, requested_reviewer, user }) => (['review_requested', 'review_request_removed'].includes(event) && isCopilot(requested_reviewer)) || (event === 'reviewed' && isCopilot(user)));
-  return last?.event === 'review_requested';
+  return events.findLast(isCopilotEvent)?.event === 'review_requested';
+}
+
+async function requestCopilot(github, core, pr) {
+  try {
+    await github.graphql(REQUEST_COPILOT, { id: pr.node_id });
+    return WAITING;
+  } catch (error) {
+    core.warning(`Failed to request a Copilot review: ${error.message}`);
+    return ['pending', 'Failed to request a Copilot review of the new head'];
+  }
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function evaluate({ github, context, pr, delay }) {
+async function copilotHold({ github, context, core, pr, delay = sleep, setPending }) {
   if (pr.draft) {
     return ['pending', 'Waiting for the PR to be ready'];
   }
   const reviews = await github.paginate(github.rest.pulls.listReviews, { ...context.repo, pull_number: pr.number, per_page: 100 });
   if (reviews.some((review) => isCopilotReview(review) && review.commit_id === pr.head.sha)) {
-    return ['success', 'Copilot has reviewed'];
+    return [];
   }
   if (await copilotRequested(github, context, pr)) {
     return WAITING;
@@ -48,9 +62,9 @@ async function evaluate({ github, context, pr, delay }) {
   const pushedAt = suites.length ? Math.min(...suites.map(({ created_at }) => Date.parse(created_at))) : 0;
   const remaining = REQUEST_WINDOW_MS - (Date.now() - Math.max(Date.parse(readyAt), pushedAt));
   if (!(remaining > 0)) {
-    return NOT_REQUESTED;
+    return reviews.some(isCopilotReview) && events.findLast(isCopilotEvent)?.event !== 'review_request_removed' ? requestCopilot(github, core, pr) : [];
   }
-  await setStatus(github, context, pr, 'pending', 'Waiting for a Copilot review request');
+  await setPending('Waiting for a Copilot review request');
   for (let check = 0; check < Math.ceil(remaining / REQUEST_DELAY_MS); check++) {
     await delay(REQUEST_DELAY_MS);
     if (await copilotRequested(github, context, pr)) {
@@ -58,28 +72,7 @@ async function evaluate({ github, context, pr, delay }) {
     }
   }
   const { data: latest } = await github.rest.pulls.get({ ...context.repo, pull_number: pr.number });
-  return latest.head.sha === pr.head.sha ? evaluate({ github, context, pr: latest, delay }) : null;
-}
-
-async function setStatus(github, context, pr, state, description) {
-  await github.rest.repos.createCommitStatus({ ...context.repo, sha: pr.head.sha, context: STATUS_CONTEXT, state, description });
-}
-
-async function gate({ github, context, delay = sleep }) {
-  const pr = await findPullRequest(github, context);
-  if (!pr) {
-    return;
-  }
-  let status;
-  try {
-    status = await evaluate({ github, context, pr, delay });
-  } catch (error) {
-    await setStatus(github, context, pr, 'error', 'Copilot review check failed to run');
-    throw error;
-  }
-  if (status) {
-    await setStatus(github, context, pr, ...status);
-  }
+  return latest.head.sha === pr.head.sha ? copilotHold({ github, context, core, pr: latest, delay, setPending }) : null;
 }
 
 async function holdAutoMerge({ github, context, core }) {
@@ -125,7 +118,6 @@ async function waitForReview({ github, context, delay = sleep }) {
       return false;
     }
     if (!waited) {
-      await setStatus(github, context, pull_request, ...WAITING);
       await require('./codeowner-review.js').setStatus(github, context, pull_request, ...WAITING);
     }
     const reviews = await github.paginate(github.rest.pulls.listReviews, { ...context.repo, pull_number: pr.number, per_page: 100 });
@@ -137,4 +129,4 @@ async function waitForReview({ github, context, delay = sleep }) {
   return false;
 }
 
-module.exports = { gate, holdAutoMerge, waitForReview, copilotRequested, isCopilot, isCopilotReview };
+module.exports = { copilotHold, holdAutoMerge, waitForReview, isCopilotReview };

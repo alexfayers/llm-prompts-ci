@@ -1,5 +1,5 @@
 name: PR automation
-description: Sync a public repo's PR status onto the llm-prompts ecosystem project board, enable squash auto-merge on ready contribute PRs, assign the PR author, apply a breaking label from the PR title or body, label blocked PRs, label PRs with merge conflicts or failing required checks as blocked, apply path-based area labels, report a codeowner-review commit status and request the needed owners' review, report a copilot-review commit status that waits for a requested Copilot review, and label PRs ready to auto-rebase, and rebase auto-rebase PRs onto the base branch when it moves or when the label is added.
+description: Sync a public repo's PR status onto the llm-prompts ecosystem project board, enable squash auto-merge on ready contribute PRs, assign the PR author, apply a breaking label from the PR title or body, label blocked PRs, label PRs with merge conflicts or failing required checks as blocked, apply path-based area labels, report a codeowner-review commit status that waits for a requested Copilot review and request the needed owners' review, and label PRs ready to auto-rebase, and rebase auto-rebase PRs onto the base branch when it moves or when the label is added.
 inputs:
   automation-token:
     description: Token for enabling auto-merge, for rebasing PRs and for removing the blocked label. Unlike github.token, it makes these changes start new workflow runs. In a private repo, scope the token to that repo only.
@@ -37,8 +37,7 @@ runs:
 
     - name: Codeowner review gate
       if: |
-        (github.event_name == 'pull_request_target' && contains(fromJSON('["opened", "reopened", "synchronize", "ready_for_review", "converted_to_draft", "edited", "labeled", "unlabeled", "auto_merge_enabled"]'), github.event.action)) ||
-        (github.event_name == 'pull_request_target' && github.event.action == 'review_requested') ||
+        (github.event_name == 'pull_request_target' && contains(fromJSON('["opened", "reopened", "synchronize", "ready_for_review", "converted_to_draft", "edited", "labeled", "unlabeled", "review_requested", "review_request_removed", "auto_merge_enabled"]'), github.event.action)) ||
         (github.event_name == 'workflow_run' && contains(fromJSON('["CI", "PR review", "Copilot"]'), github.event.workflow_run.name))
       continue-on-error: true
       uses: actions/github-script@v9
@@ -50,22 +49,7 @@ runs:
         github-token: ${{ inputs.github-token }}
         script: |
           const { gate } = require(`${process.env.ACTION_PATH}/codeowner-review.js`)
-          await gate({ github, context })
-
-    - name: Copilot review gate
-      if: |
-        (github.event_name == 'pull_request_target' && contains(fromJSON('["opened", "reopened", "synchronize", "ready_for_review", "converted_to_draft", "edited", "labeled", "unlabeled", "review_requested", "review_request_removed", "auto_merge_enabled"]'), github.event.action)) ||
-        (github.event_name == 'workflow_run' && contains(fromJSON('["PR review", "Copilot"]'), github.event.workflow_run.name))
-      continue-on-error: true
-      uses: actions/github-script@v9
-      env:
-        ACTION_PATH: ${{ github.action_path }}
-      with:
-        retries: 3
-        github-token: ${{ inputs.github-token }}
-        script: |
-          const { gate } = require(`${process.env.ACTION_PATH}/copilot-review.js`)
-          await gate({ github, context })
+          await gate({ github, context, core })
 
     - name: Enable squash auto-merge
       if: |
