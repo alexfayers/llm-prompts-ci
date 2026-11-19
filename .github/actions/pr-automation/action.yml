@@ -1,5 +1,5 @@
 name: PR automation
-description: Sync a public repo's PR status onto the llm-prompts ecosystem project board, enable squash auto-merge on ready contribute PRs, assign the PR author, apply a breaking label from the PR title or body, label blocked PRs, label PRs with merge conflicts or failing required checks as blocked, apply path-based area labels, report a codeowner-review commit status that waits for a requested Copilot review and request the needed owners' review, and label PRs ready to auto-rebase, and rebase auto-rebase PRs onto the base branch when it moves or when the label is added.
+description: Sync a public repo's PR status onto the llm-prompts ecosystem project board, enable squash auto-merge on ready contribute PRs, apply a breaking label from the PR title or body, label blocked PRs, label PRs with merge conflicts or failing required checks as blocked, apply path-based area labels, report a codeowner-review commit status that waits for a requested Copilot review and request the needed owners' review, and label PRs ready to auto-rebase, and rebase auto-rebase PRs onto the base branch when it moves or when the label is added.
 inputs:
   automation-token:
     description: Token for enabling auto-merge, for rebasing PRs and for removing the blocked label. Unlike github.token, it makes these changes start new workflow runs. In a private repo, scope the token to that repo only.
@@ -77,20 +77,6 @@ runs:
         script: |
           const { rebase } = require(`${process.env.ACTION_PATH}/rebase-prs.js`)
           await rebase({ github, context, core })
-
-    - name: Assign PR author
-      if: |
-        github.event_name == 'pull_request_target' &&
-        contains(fromJSON('["opened", "reopened"]'), github.event.action)
-      uses: actions/github-script@v9
-      env:
-        ACTION_PATH: ${{ github.action_path }}
-      with:
-        retries: 3
-        github-token: ${{ inputs.github-token }}
-        script: |
-          const { assign } = require(`${process.env.ACTION_PATH}/assign-author.js`)
-          await assign({ github, context, core })
 
     - name: Label breaking PR
       if: |
