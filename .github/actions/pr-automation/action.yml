@@ -49,7 +49,7 @@ runs:
         github-token: ${{ inputs.github-token }}
         script: |
           const { gate } = require(`${process.env.ACTION_PATH}/codeowner-review.js`)
-          await gate({ github, context })
+          await gate({ github, context, core })
 
     - name: Enable squash auto-merge
       if: |

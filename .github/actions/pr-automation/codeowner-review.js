@@ -156,7 +156,7 @@ async function requestOwners({ github, context, pr, owners, reviews }) {
   }
 }
 
-async function gate({ github, context, delay }) {
+async function gate({ github, context, core, delay }) {
   const pr = await findPullRequest(github, context);
   if (!pr) {
     return;
@@ -164,7 +164,7 @@ async function gate({ github, context, delay }) {
   let result;
   let required;
   try {
-    const hold = isSafeBotPr(pr) ? [] : await copilotHold({ github, context, pr, delay, setPending: (description) => setStatus(github, context, pr, 'pending', description) });
+    const hold = isSafeBotPr(pr) ? [] : await copilotHold({ github, context, core, pr, delay, setPending: (description) => setStatus(github, context, pr, 'pending', description) });
     if (hold?.length) {
       await setStatus(github, context, pr, ...hold);
     }
