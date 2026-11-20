@@ -10,10 +10,21 @@ on:
 permissions: {}
 
 jobs:
-  inner:
-    if: inputs.mode != 'skip'
+  check:
     runs-on: ubuntu-latest
+    outputs:
+      blocked: ${{ steps.check.outputs.blocked }}
     steps:
-      - run: test "$MODE" = success
+      - id: check
+        run: |
+          test "$MODE" != fail
+          echo "blocked=$([ "$MODE" = blocked ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
         env:
           MODE: ${{ inputs.mode }}
+
+  gate:
+    needs: check
+    if: needs.check.outputs.blocked == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - run: 'true'

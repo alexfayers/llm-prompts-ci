@@ -7,24 +7,24 @@ on:
 permissions: {}
 
 jobs:
-  inner-success:
+  inner-open:
     uses: ./.github/workflows/probe-needs-inner.yml
     with:
-      mode: success
+      mode: open
 
-  after-success:
-    needs: inner-success
+  after-open:
+    needs: inner-open
     runs-on: ubuntu-latest
     steps:
       - run: 'true'
 
-  inner-skip:
+  inner-blocked:
     uses: ./.github/workflows/probe-needs-inner.yml
     with:
-      mode: skip
+      mode: blocked
 
-  after-skip:
-    needs: inner-skip
+  after-blocked:
+    needs: inner-blocked
     runs-on: ubuntu-latest
     steps:
       - run: 'true'
