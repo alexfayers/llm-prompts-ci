@@ -1,8 +1,8 @@
 name: PR automation
-description: Sync a public repo's PR status onto the llm-prompts ecosystem project board, enable squash auto-merge on ready contribute PRs, apply a breaking label from the PR title or body, label blocked PRs, label PRs with merge conflicts or failing required checks as blocked, apply path-based area labels, report a codeowner-review commit status that waits for a requested Copilot review and request the needed owners' review, and label PRs ready to auto-rebase, and rebase auto-rebase PRs onto the base branch when it moves or when the label is added.
+description: Sync a public repo's PR status onto the llm-prompts ecosystem project board, enable squash auto-merge on ready contribute PRs, apply a breaking label from the PR title or body, label blocked PRs, label PRs with merge conflicts or failing required checks as blocked, apply path-based area labels, report a codeowner-review commit status that waits for a requested Copilot review and request the needed owners' review, and label PRs ready to auto-rebase.
 inputs:
   automation-token:
-    description: Token for enabling auto-merge, for rebasing PRs and for removing the blocked label. Unlike github.token, it makes these changes start new workflow runs. In a private repo, scope the token to that repo only.
+    description: Token for enabling auto-merge and for removing the blocked label. Unlike github.token, it makes these changes start new workflow runs. In a private repo, scope the token to that repo only.
     required: true
   projects-token:
     description: Token for the Project GraphQL status sync. In a private repo, scope the token to that repo only.
@@ -65,18 +65,6 @@ runs:
         script: |
           const { enable } = require(`${process.env.ACTION_PATH}/auto-merge.js`)
           await enable({ github, context, core })
-
-    - name: Rebase auto-rebase PRs
-      if: github.event_name == 'push'
-      uses: actions/github-script@v9
-      env:
-        ACTION_PATH: ${{ github.action_path }}
-      with:
-        retries: 3
-        github-token: ${{ inputs.automation-token }}
-        script: |
-          const { rebase } = require(`${process.env.ACTION_PATH}/rebase-prs.js`)
-          await rebase({ github, context, core })
 
     - name: Label breaking PR
       if: |
@@ -170,20 +158,8 @@ runs:
           const { labelAutoRebase } = require(`${process.env.ACTION_PATH}/label-pr.js`)
           await labelAutoRebase({ github, context, core })
 
-    - name: Rebase newly labelled PR
-      if: steps.label-auto-rebase.outputs.labelled == 'true' || (github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'auto-rebase')
-      uses: actions/github-script@v9
-      env:
-        ACTION_PATH: ${{ github.action_path }}
-      with:
-        retries: 3
-        github-token: ${{ inputs.automation-token }}
-        script: |
-          const { rebaseLabelled } = require(`${process.env.ACTION_PATH}/rebase-prs.js`)
-          await rebaseLabelled({ github, context, core })
-
     - name: Label PR by area
-      if: ${{ !contains(fromJSON('["push", "workflow_run"]'), github.event_name) }}
+      if: github.event_name == 'pull_request_target'
       uses: actions/labeler@v7
       with:
         repo-token: ${{ inputs.github-token }}

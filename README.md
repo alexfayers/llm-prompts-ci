@@ -13,6 +13,14 @@ Shared GitHub Actions for the llm-prompts, cline-hooks and mcp-memory repositori
 - `release-please.yml` credits each release note line with its PR author, except bots and the repo owner.
 - Each repo calls `release-dispatch.yml` on push to main, which triggers `releases.yml` for that repo.
 
+## PR rebases
+
+- Each base branch has one active PR, marked `auto-rebase-active`.
+- Selection uses current auto-merge, review and required-check results, not the retained `auto-rebase` label.
+- Pending checks keep the active PR selected. Closed PRs and definite blockers release the selection.
+- Only the selected PR updates its branch. Strict required-check freshness is unchanged.
+- `sync-shared-files.yml` opens caller updates in llm-prompts, cline-hooks and mcp-memory. Merge those updates to enable disabled-auto-merge events and scheduled recovery.
+
 ## Tests
 
 ```sh

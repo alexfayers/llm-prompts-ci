@@ -9,6 +9,7 @@ on:
       - .github/instructions/python.instructions.md
       - .github/instructions/typescript.instructions.md
       - templates/release-please-config.json
+      - .github/workflows/project-automation.yml
   workflow_dispatch:
 
 concurrency:
@@ -39,11 +40,14 @@ jobs:
           repository: ${{ github.repository_owner }}/${{ matrix.repo }}
           token: ${{ steps.releaser.outputs.token }}
           path: target
-      - run: mkdir -p target/.github/instructions
+      - run: mkdir -p target/.github/instructions target/.github/workflows
       - run: cp .github/instructions/{review,prompts,python,typescript}.instructions.md target/.github/instructions/
       - run: sed "s/__REPO__/$REPO/" templates/release-please-config.json > target/release-please-config.json
         env:
           REPO: ${{ matrix.repo }}
+      - run: sed "s#uses: ./.github/workflows/pr-automation.yml#uses: $OWNER/llm-prompts-ci/.github/workflows/pr-automation.yml@main#" .github/workflows/project-automation.yml > target/.github/workflows/project-automation.yml
+        env:
+          OWNER: ${{ github.repository_owner }}
       - id: pr
         uses: peter-evans/create-pull-request@v8
         with:
@@ -58,11 +62,12 @@ jobs:
 
             - Copy the Copilot review rules from llm-prompts-ci to `.github/instructions/`.
             - Copy the release-please config from llm-prompts-ci to `release-please-config.json`.
+            - Copy the project automation caller from llm-prompts-ci.
 
             ## Why
 
             - llm-prompts-ci is the one place that edits these files.
-            - Copilot review and release-please only read this repo's own files, so the copies have to be committed here.
+            - Copilot review, release-please and workflow triggers read this repo's own files.
       - if: steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'
         run: gh pr merge --auto --squash "$PR_URL"
         env:

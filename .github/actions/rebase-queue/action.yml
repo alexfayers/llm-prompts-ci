@@ -1,0 +1,18 @@
+name: Rebase queue
+description: Update only the next merge-ready PR for each base branch.
+inputs:
+  automation-token:
+    description: Token for claiming the active PR and updating its branch.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@v9
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      with:
+        retries: 3
+        github-token: ${{ inputs.automation-token }}
+        script: |
+          const { rebase } = require(`${process.env.ACTION_PATH}/../pr-automation/rebase-prs.js`)
+          await rebase({ github, context, core })

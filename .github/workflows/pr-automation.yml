@@ -29,6 +29,7 @@ on:
 
 jobs:
   automate:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     permissions:
       checks: read
@@ -50,3 +51,27 @@ jobs:
           github-token: ${{ github.token }}
           project: ${{ inputs.project }}
           review-owners: ${{ inputs.review-owners }}
+
+  rebase-queue:
+    needs: automate
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: auto-rebase-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      checks: read
+      contents: read
+      issues: read
+      pull-requests: write
+      statuses: read
+    steps:
+      - id: ci-bot
+        uses: alexfayers/llm-prompts-ci/.github/actions/app-token@main
+        with:
+          client-id: ${{ secrets.CI_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.CI_BOT_PRIVATE_KEY }}
+          fallback-token: ${{ secrets.PROJECTS_TOKEN }}
+      - uses: alexfayers/llm-prompts-ci/.github/actions/rebase-queue@main
+        with:
+          automation-token: ${{ steps.ci-bot.outputs.token }}
