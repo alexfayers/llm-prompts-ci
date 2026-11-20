@@ -1,0 +1,19 @@
+name: Probe needs inner
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  inner:
+    if: inputs.mode != 'skip'
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "$MODE" = success
+        env:
+          MODE: ${{ inputs.mode }}

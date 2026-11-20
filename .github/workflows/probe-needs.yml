@@ -1,0 +1,41 @@
+name: Probe needs
+
+on:
+  push:
+    branches: [alexfayers/probe-reusable-needs]
+
+permissions: {}
+
+jobs:
+  inner-success:
+    uses: ./.github/workflows/probe-needs-inner.yml
+    with:
+      mode: success
+
+  after-success:
+    needs: inner-success
+    runs-on: ubuntu-latest
+    steps:
+      - run: 'true'
+
+  inner-skip:
+    uses: ./.github/workflows/probe-needs-inner.yml
+    with:
+      mode: skip
+
+  after-skip:
+    needs: inner-skip
+    runs-on: ubuntu-latest
+    steps:
+      - run: 'true'
+
+  inner-fail:
+    uses: ./.github/workflows/probe-needs-inner.yml
+    with:
+      mode: fail
+
+  after-fail:
+    needs: inner-fail
+    runs-on: ubuntu-latest
+    steps:
+      - run: 'true'
