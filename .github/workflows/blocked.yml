@@ -1,0 +1,14 @@
+name: Blocked
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  unblocked:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: alexfayers/llm-prompts-ci/.github/actions/blocked@main
+        with:
+          fail-when-blocked: 'true'
