@@ -1,8 +1,8 @@
 name: PR automation
-description: Sync a public repo's PR status onto the llm-prompts ecosystem project board, enable squash auto-merge on ready contribute PRs, apply a breaking label from the PR title or body, label blocked PRs, label PRs with merge conflicts or failing required checks as blocked, apply path-based area labels, report a codeowner-review commit status that waits for a requested Copilot review and request the needed owners' review, and label PRs ready to auto-rebase.
+description: Sync a public repo's PR status onto the llm-prompts ecosystem project board, enable squash auto-merge on ready contribute PRs, apply a breaking label from the PR title or body, label PRs with requested changes as blocked:changes-requested, label PRs with merge conflicts as blocked:conflicts and failing required checks as blocked:checks, apply path-based area labels, report a codeowner-review commit status that waits for a requested Copilot review, label PRs waiting for an approval as pending:approval and request the needed owners' review, and label PRs ready to auto-rebase.
 inputs:
   automation-token:
-    description: Token for enabling auto-merge and for removing the blocked label. Unlike github.token, it makes these changes start new workflow runs. In a private repo, scope the token to that repo only.
+    description: Token for enabling auto-merge and for removing blocked labels. Unlike github.token, it makes these changes start new workflow runs. In a private repo, scope the token to that repo only.
     required: true
   projects-token:
     description: Token for the Project GraphQL status sync. In a private repo, scope the token to that repo only.
@@ -87,12 +87,13 @@ runs:
       uses: actions/github-script@v9
       env:
         ACTION_PATH: ${{ github.action_path }}
+        AUTOMATION_TOKEN: ${{ inputs.automation-token }}
       with:
         retries: 3
         github-token: ${{ inputs.github-token }}
         script: |
           const { labelBlocked } = require(`${process.env.ACTION_PATH}/label-pr.js`)
-          await labelBlocked({ github, context, core })
+          await labelBlocked({ github, removeClient: getOctokit(process.env.AUTOMATION_TOKEN), context, core })
 
     - name: Label conflicting PR
       if: |

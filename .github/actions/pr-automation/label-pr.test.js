@@ -25,7 +25,7 @@ test('missing body does not throw', () => {
   assert.equal(hasBreakingChange('feat: add widget', undefined), false);
 });
 
-function blockedFixture({ reviewDecision = null, labels = [], state = 'OPEN', createLabelError = null }) {
+function blockedFixture({ reviewDecision = null, reviews = [], labels = [], events = [], state = 'OPEN', createLabelError = null }) {
   const calls = [];
   const issues = {
     createLabel: async (args) => {
@@ -33,9 +33,12 @@ function blockedFixture({ reviewDecision = null, labels = [], state = 'OPEN', cr
       if (createLabelError) throw createLabelError;
     },
     addLabels: async (args) => calls.push(['addLabels', args.labels]),
-    removeLabel: async (args) => calls.push(['removeLabel', args.name]),
+    removeLabel: async () => assert.fail('removal must use the token client'),
+    listEvents: 'events',
   };
+  const removeClient = { rest: { issues: { removeLabel: async (args) => calls.push(['removeLabel', args.name]) } } };
   const github = {
+    paginate: async () => events.map(([name, login]) => ({ event: 'labeled', label: { name }, actor: { login } })),
     graphql: async () => ({
       repository: {
         pullRequest: {
@@ -44,6 +47,7 @@ function blockedFixture({ reviewDecision = null, labels = [], state = 'OPEN', cr
           state,
           isDraft: true,
           reviewDecision,
+          latestOpinionatedReviews: { nodes: reviews.map(([state, authorCanPushToRepository]) => ({ state, authorCanPushToRepository })) },
           headRefOid: 'abc',
           labels: { nodes: labels.map((name) => ({ name })) },
         },
@@ -55,17 +59,27 @@ function blockedFixture({ reviewDecision = null, labels = [], state = 'OPEN', cr
   };
   const context = { repo: { owner: 'o', repo: 'r' }, payload: { pull_request: { number: 7 } } };
   const core = { info() {}, warning: (message) => calls.push(['warning', message]) };
-  return { github, context, core, calls };
+  return { github, removeClient, context, core, calls };
 }
 
-test('blocked PR gets the blocked label, creating it first', async () => {
+const changesLabelled = [['createLabel', 'blocked:changes-requested'], ['addLabels', ['blocked:changes-requested']]];
+
+test('blocked PR gets the changes-requested label, creating it first', async () => {
   const { github, context, core, calls } = blockedFixture({ reviewDecision: 'CHANGES_REQUESTED' });
   await labelBlocked({ github, context, core });
-  assert.deepEqual(calls, [['createLabel', 'blocked'], ['addLabels', ['blocked']]]);
+  assert.deepEqual(calls, changesLabelled);
+});
+
+test('only a reviewer with push access requesting changes labels a PR without a review decision', async () => {
+  for (const [canPush, expected] of [[true, changesLabelled], [false, []]]) {
+    const { github, context, core, calls } = blockedFixture({ reviews: [['APPROVED', true], ['CHANGES_REQUESTED', canPush]] });
+    await labelBlocked({ github, context, core });
+    assert.deepEqual(calls, expected, String(canPush));
+  }
 });
 
 test('already-labelled blocked PR is left alone', async () => {
-  const { github, context, core, calls } = blockedFixture({ reviewDecision: 'CHANGES_REQUESTED', labels: ['blocked'] });
+  const { github, context, core, calls } = blockedFixture({ reviewDecision: 'CHANGES_REQUESTED', labels: ['blocked:changes-requested'] });
   await labelBlocked({ github, context, core });
   assert.deepEqual(calls, []);
 });
@@ -74,6 +88,19 @@ test('unblocked PR without the label is left alone', async () => {
   const { github, context, core, calls } = blockedFixture({});
   await labelBlocked({ github, context, core });
   assert.deepEqual(calls, []);
+});
+
+test('a cleared PR loses only a changes-requested label automation added', async () => {
+  const bot = 'github-actions[bot]';
+  for (const [labels, events, expected] of [
+    [['blocked:changes-requested'], [['blocked:changes-requested', bot]], [['removeLabel', 'blocked:changes-requested']]],
+    [['blocked:changes-requested'], [['blocked:changes-requested', bot], ['blocked:changes-requested', 'someone']], []],
+    [['blocked'], [['blocked', bot]], []],
+  ]) {
+    const f = blockedFixture({ labels, events });
+    await labelBlocked(f);
+    assert.deepEqual(f.calls, expected, JSON.stringify(events));
+  }
 });
 
 test('closed PR is left alone', async () => {
@@ -88,7 +115,7 @@ test('existing blocked label does not stop labelling', async () => {
     createLabelError: Object.assign(new Error('already exists'), { status: 422 }),
   });
   await labelBlocked({ github, context, core });
-  assert.deepEqual(calls.at(-1), ['addLabels', ['blocked']]);
+  assert.deepEqual(calls.at(-1), ['addLabels', ['blocked:changes-requested']]);
   assert.equal(calls.some(([kind]) => kind === 'warning'), false);
 });
 
@@ -113,7 +140,7 @@ test('approved ready auto-merge PR gets the auto-rebase label', async () => {
 });
 
 test('PR missing any auto-rebase condition is left alone', async () => {
-  for (const options of [{ status: 'pending' }, { labels: ['blocked'] }, { draft: true }, { autoMerge: false }, { labels: ['auto-rebase'] }]) {
+  for (const options of [{ status: 'pending' }, { labels: ['blocked'] }, { labels: ['blocked:conflicts'] }, { draft: true }, { autoMerge: false }, { labels: ['auto-rebase'] }]) {
     const f = rebaseFixture(options);
     await labelAutoRebase(f);
     assert.deepEqual(f.calls, [], JSON.stringify(options));

@@ -13,4 +13,4 @@ function report({ context, core, failWhenBlocked = false }) {
   }
 }
 
-module.exports = { report };
+module.exports = { report, isBlockedLabel, REASON_PREFIX };

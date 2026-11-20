@@ -2,14 +2,14 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { labelConflicts } = require('./label-conflicts.js');
 
-async function run({ mergeable, labels = [], reviewDecision = null, actor = 'github-actions[bot]', open = [], rules = [], runs = [], statuses = [], payload = { pull_request: { number: 7, head: { sha: 'abc' }, base: { ref: 'main' } } } }) {
+async function run({ mergeable, labels = [], reviewDecision = null, reviews = [], actor = 'github-actions[bot]', open = [], rules = [], runs = [], statuses = [], payload = { pull_request: { number: 7, head: { sha: 'abc' }, base: { ref: 'main' } } } }) {
   const changes = [];
   const states = [].concat(mergeable);
   const record = (kind) => async (args) => changes.push([kind, args.issue_number, args.labels ?? args.name]);
   const labelEvent = (login, name = 'blocked') => ({ event: 'labeled', label: { name }, actor: { login } });
   const github = {
-    graphql: async () => ({ repository: { pullRequest: { reviewDecision, mergeable: states.shift() ?? 'UNKNOWN', labels: { nodes: labels.map((name) => ({ name })) } } } }),
-    paginate: async (method) => ({ pulls: open, rules, checks: runs })[method] ?? [labelEvent('someone'), labelEvent(actor), labelEvent('someone', 'other')],
+    graphql: async () => ({ repository: { pullRequest: { reviewDecision, latestOpinionatedReviews: { nodes: reviews }, mergeable: states.shift() ?? 'UNKNOWN', labels: { nodes: labels.map((name) => ({ name })) } } } }),
+    paginate: async (method) => ({ pulls: open, rules, checks: runs })[method] ?? [...labels.flatMap((name) => [labelEvent('someone', name), labelEvent(actor, name)]), labelEvent('someone', 'other')],
     rest: { pulls: { list: 'pulls' }, repos: { getBranchRules: 'rules', listCommitStatusesForRef: async () => ({ data: statuses }) }, checks: { listForRef: 'checks' }, issues: { createLabel: record('createLabel'), addLabels: record('addLabels'), removeLabel: () => assert.fail('removal must use the token client') } },
   };
   const removeClient = { rest: { issues: { removeLabel: record('removeLabel') } } };
@@ -18,14 +18,21 @@ async function run({ mergeable, labels = [], reviewDecision = null, actor = 'git
   return changes;
 }
 
-test('blocked label follows merge conflicts, retrying unknown mergeability', async () => {
+const conflicts = [['createLabel', undefined, 'blocked:conflicts'], ['addLabels', 7, ['blocked:conflicts']]];
+
+test('conflicts label follows merge conflicts and the legacy blocked label clears, retrying unknown mergeability', async () => {
   const cases = [
-    [{ mergeable: 'CONFLICTING' }, [['createLabel', undefined, 'blocked'], ['addLabels', 7, ['blocked']]]],
-    [{ mergeable: 'CONFLICTING', labels: ['blocked'] }, []],
+    [{ mergeable: 'CONFLICTING' }, conflicts],
+    [{ mergeable: 'CONFLICTING', labels: ['blocked:conflicts'] }, []],
+    [{ mergeable: 'CONFLICTING', labels: ['blocked'] }, conflicts],
     [{ mergeable: 'MERGEABLE' }, []],
     [{ mergeable: 'MERGEABLE', labels: ['blocked'] }, [['removeLabel', 7, 'blocked']]],
     [{ mergeable: 'MERGEABLE', labels: ['blocked'], actor: 'alex' }, []],
+    [{ mergeable: 'MERGEABLE', labels: ['blocked:conflicts'] }, [['removeLabel', 7, 'blocked:conflicts']]],
+    [{ mergeable: 'MERGEABLE', labels: ['blocked:conflicts'], actor: 'someone' }, []],
+    [{ mergeable: 'UNKNOWN', labels: ['blocked:conflicts'] }, []],
     [{ mergeable: 'MERGEABLE', labels: ['blocked'], reviewDecision: 'CHANGES_REQUESTED' }, []],
+    [{ mergeable: 'MERGEABLE', labels: ['blocked'], reviews: [{ state: 'CHANGES_REQUESTED', authorCanPushToRepository: true }] }, []],
     [{ mergeable: 'MERGEABLE', labels: ['blocked'], statuses: [{ context: 'dependencies', state: 'pending' }] }, []],
     [{ mergeable: 'MERGEABLE', labels: ['blocked'], statuses: [{ context: 'dependencies', state: 'success' }] }, [['removeLabel', 7, 'blocked']]],
     [{ mergeable: 'UNKNOWN', labels: ['blocked'] }, []],
@@ -42,15 +49,17 @@ test('a push checks every open PR on the pushed branch', async () => {
 });
 
 const required = [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'test' }] } }];
-const added = [['createLabel', undefined, 'blocked'], ['addLabels', 7, ['blocked']]];
+const added = [['createLabel', undefined, 'blocked:checks'], ['addLabels', 7, ['blocked:checks']]];
 
-test('blocked label follows failing required checks on the head commit', async () => {
+test('checks label follows failing required checks on the head commit', async () => {
   const cases = [
     [{ runs: [{ name: 'test', conclusion: 'failure' }] }, added],
     [{ runs: [{ name: 'size-report', conclusion: 'failure' }] }, []],
     [{ runs: [{ name: 'test', conclusion: 'cancelled' }] }, []],
-    [{ runs: [{ name: 'test', conclusion: 'failure' }], labels: ['blocked'], mergeable: 'MERGEABLE' }, []],
-    [{ runs: [{ name: 'test', conclusion: 'success' }], labels: ['blocked'], mergeable: 'MERGEABLE' }, [['removeLabel', 7, 'blocked']]],
+    [{ runs: [{ name: 'test', conclusion: 'failure' }], labels: ['blocked:checks'] }, []],
+    [{ runs: [{ name: 'test', conclusion: 'failure' }], labels: ['blocked'] }, added],
+    [{ runs: [{ name: 'test', conclusion: 'success' }], labels: ['blocked'] }, [['removeLabel', 7, 'blocked']]],
+    [{ runs: [{ name: 'test', conclusion: 'success' }], labels: ['blocked:checks'] }, [['removeLabel', 7, 'blocked:checks']]],
   ];
   for (const [options, expected] of cases) {
     assert.deepEqual(await run({ mergeable: 'MERGEABLE', rules: required, ...options }), expected, JSON.stringify(options));

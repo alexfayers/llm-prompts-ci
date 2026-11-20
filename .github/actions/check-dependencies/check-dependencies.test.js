@@ -2,16 +2,17 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { check } = require('./check-dependencies.js');
 
-function fixture({ body, labels = [], states = {} }) {
+function fixture({ body, labels = [], states = {}, labelledBy = 'github-actions[bot]' }) {
   const calls = [];
   const github = {
     graphql: async () => ({ repository: { pullRequest: { reviewDecision: github.reviewDecision, mergeable: github.mergeable ?? 'MERGEABLE' } } }),
-    paginate: async (fn) => (fn === github.rest.repos.getBranchRules ? [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'ci' }] } }] : fn === github.rest.checks.listForRef ? [{ name: 'ci', conclusion: github.ciConclusion ?? 'success' }] : []),
+    paginate: async (fn) => (fn === github.rest.repos.getBranchRules ? [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'ci' }] } }] : fn === github.rest.checks.listForRef ? [{ name: 'ci', conclusion: github.ciConclusion ?? 'success' }] : fn === github.rest.issues.listEvents ? labels.map((name) => ({ event: 'labeled', label: { name }, actor: { login: labelledBy } })) : []),
     rest: {
-      pulls: { list() {} },
+      pulls: { list() {}, get: async ({ pull_number }) => ({ data: [context.payload.pull_request, ...await github.paginate(github.rest.pulls.list, { state: 'open' })].find((pr) => pr?.number === pull_number) }) },
       checks: { listForRef() {} },
       repos: { getBranchRules() {}, createCommitStatus: async ({ state }) => calls.push(['status', state]) },
       issues: {
+        listEvents() {},
         get: async ({ owner, repo, issue_number }) => ({ data: { state: states[`${owner}/${repo}#${issue_number}`] ?? 'closed' } }),
         createLabel: async () => calls.push('createLabel'),
         addLabels: async ({ labels }) => calls.push(['addLabels', labels]),
@@ -24,12 +25,12 @@ function fixture({ body, labels = [], states = {} }) {
   return { github, context, core, calls, getOctokit: () => removeClient, token: 'actions-token', removeClient };
 }
 
-test('open dependencies in every link style add the blocked label and never fail', async () => {
+test('open dependencies in every link style add the dependencies label and never fail', async () => {
   const body = 'Depends on #1\nBlocked by a/b#2\ndepends on https://github.com/c/d/pull/3';
   const states = { 'o/r#1': 'open', 'a/b#2': 'open', 'c/d#3': 'open' };
   const { github, context, core, calls } = fixture({ body, states });
   await check({ github, context, core });
-  assert.deepEqual(calls, [['status', 'pending'], 'createLabel', ['addLabels', ['blocked']]]);
+  assert.deepEqual(calls, [['status', 'pending'], 'createLabel', ['addLabels', ['blocked:dependencies']]]);
 });
 
 test('cleared dependencies remove the blocked label unless changes are requested', async () => {
@@ -55,6 +56,29 @@ for (const [name, state, removed] of [
   });
 }
 
+test('a dependency added after the event still blocks', async () => {
+  const { github, context, core, calls } = fixture({ body: 'No links' });
+  github.rest.pulls.get = async () => ({ data: { ...context.payload.pull_request, body: 'Depends on #1' } });
+  github.rest.issues.get = async () => ({ data: { state: 'open' } });
+  await check({ github, context, core });
+  assert.deepEqual(calls, [['status', 'pending'], 'createLabel', ['addLabels', ['blocked:dependencies']]]);
+});
+
+test('cleared dependencies remove only a dependencies label automation added, even while changes are requested', async () => {
+  for (const [labelledBy, expected] of [['github-actions[bot]', [['status', 'success'], ['removeLabel', 'blocked:dependencies']]], ['someone', [['status', 'success']]]]) {
+    const { github, context, core, calls, getOctokit, token } = fixture({ body: 'Depends on #1', labels: ['blocked:dependencies'], labelledBy });
+    github.reviewDecision = 'CHANGES_REQUESTED';
+    await check({ github, context, core, getOctokit, token });
+    assert.deepEqual(calls, expected, labelledBy);
+  }
+});
+
+test('cleared dependencies keep a blocked label a person added', async () => {
+  const { github, context, core, calls, getOctokit, token } = fixture({ body: 'Depends on #1', labels: ['blocked'], labelledBy: 'someone' });
+  await check({ github, context, core, getOctokit, token });
+  assert.deepEqual(calls, [['status', 'success']]);
+});
+
 test('removing a blocked label that is already gone does not fail', async () => {
   const { github, context, core, calls, getOctokit, token, removeClient } = fixture({ body: 'Depends on #1', labels: ['blocked'] });
   removeClient.rest.issues.removeLabel = async () => { throw Object.assign(new Error('Label does not exist'), { status: 404 }); };
@@ -71,14 +95,15 @@ test('an API error sets the error status and still fails', async () => {
 
 test('a manual run rechecks open PRs that are blocked or pending and skips the rest', async () => {
   const pull = (number, labels, body = 'Depends on #1') => ({ number, head: { sha: `sha${number}` }, base: { ref: 'main' }, body, labels: labels.map((name) => ({ name })) });
-  const { github, context, core, calls, getOctokit, token } = fixture({ body: '' });
+  const { github, context, core, calls, getOctokit, token } = fixture({ body: '', states: { 'o/r#9': 'open' } });
   delete context.payload.pull_request;
-  const pulls = [pull(1, ['blocked']), pull(2, []), pull(3, [])];
-  github.paginate = async (fn, params) => (fn === github.rest.pulls.list && params.state === 'open' ? pulls : []);
+  const pulls = [pull(1, ['blocked']), pull(2, []), pull(3, []), pull(4, ['blocked:dependencies'], 'No links'), pull(5, ['blocked:conflicts'], 'Depends on #9')];
+  const paginate = github.paginate;
+  github.paginate = async (fn, params) => (fn === github.rest.pulls.list && params.state === 'open' ? pulls : fn === github.rest.issues.listEvents ? [{ event: 'labeled', label: { name: 'blocked' }, actor: { login: 'github-actions[bot]' } }] : paginate(fn, params));
   github.rest.repos.createCommitStatus = async ({ sha, state }) => calls.push(['status', sha, state]);
-  github.rest.repos.listCommitStatusesForRef = async ({ ref }) => ({ data: ref === 'sha2' ? [{ context: 'dependencies', state: 'pending' }] : [] });
+  github.rest.repos.listCommitStatusesForRef = async ({ ref }) => ({ data: ref === 'sha2' ? [{ context: 'dependencies', state: 'pending' }] : ref === 'sha5' ? [{ context: 'dependencies', state: 'error' }] : [] });
   await check({ github, context, core, getOctokit, token });
-  assert.deepEqual(calls, [['status', 'sha1', 'success'], ['removeLabel', 'blocked'], ['status', 'sha2', 'success']]);
+  assert.deepEqual(calls, [['status', 'sha1', 'success'], ['removeLabel', 'blocked'], ['status', 'sha2', 'success'], ['status', 'sha4', 'success'], ['status', 'sha5', 'pending'], 'createLabel', ['addLabels', ['blocked:dependencies']]]);
 });
 
 test('closing a PR rechecks the open same-repo PRs that depend on it', async () => {
