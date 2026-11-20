@@ -10,9 +10,10 @@ const CODEOWNERS = '*.md @Owner\n/src/*/prompts/**/rules/ @Owner @friend\n/src/*
 
 const COPILOT_NO_COMMENTS = ['copilot-pull-request-reviewer[bot]', 'COMMENTED', true];
 
-function fixture({ author, files, reviews = [], labels = [], branch = 'feature', requested = [], draft = false, permission = 'none', codeowners = CODEOWNERS, events = [], suites = [], createdAt = '2020-01-01T00:00:00Z', copilotComments = [], eventName = 'pull_request_target', copilotApproved = true, graphqlError }) {
+function fixture({ author, files, reviews = [], labels = [], branch = 'feature', requested = [], draft = false, permission = 'none', codeowners = CODEOWNERS, events = [], suites = [], createdAt = '2020-01-01T00:00:00Z', copilotComments = [], eventName = 'pull_request_target', copilotApproved = true, graphqlError, labelEvents = [] }) {
   reviews = [...(copilotApproved ? [COPILOT_NO_COMMENTS] : []), ...reviews];
   const calls = [];
+  const labelCalls = [];
   const requests = [];
   const warnings = [];
   const live = { number: 7, node_id: 'n7', user: { login: author }, labels: labels.map((name) => ({ name })), draft, created_at: createdAt, requested_reviewers: requested.map((login) => ({ login })), requested_teams: [], head: { sha: 'abc', ref: branch }, base: { ref: 'main' } };
@@ -33,11 +34,16 @@ function fixture({ author, files, reviews = [], labels = [], branch = 'feature',
         createCommitStatus: async ({ sha, context, state }) => calls.push([sha, context, state]),
         getCollaboratorPermissionLevel: async () => ({ data: { permission } }),
       },
-      issues: { listEventsForTimeline: { items: events.map(([event, login, created_at]) => ({ event, [event === 'reviewed' ? 'user' : 'requested_reviewer']: { login }, created_at })) } },
+      issues: {
+        createLabel: async ({ name }) => labelCalls.push(['createLabel', name]),
+        addLabels: async ({ labels }) => labelCalls.push(['addLabels', labels]),
+        removeLabel: async ({ name }) => labelCalls.push(['removeLabel', name]),
+        listEvents: { items: labelEvents.map(([name, login]) => ({ event: 'labeled', label: { name }, actor: { login } })) },
+        listEventsForTimeline: { items: events.map(([event, login, created_at]) => ({ event, [event === 'reviewed' ? 'user' : 'requested_reviewer']: { login }, created_at })) } },
     },
   };
   const context = { eventName, repo: { owner: 'owner', repo: 'r' }, payload: { pull_request: structuredClone(live) } };
-  return { github, context, core: { warning: (message) => warnings.push(message) }, calls, requests, warnings, live };
+  return { github, context, core: { warning: (message) => warnings.push(message) }, calls, labelCalls, requests, warnings, live };
 }
 
 const PROMPT_FILE = 'src/llm_prompts/prompts/shared/rules/a.md';
@@ -64,6 +70,26 @@ test('owner prompt change waits for another code owner to approve', async () => 
   const approved = fixture({ author: 'owner', files: [PROMPT_FILE], reviews: [['Friend', 'APPROVED']] });
   await gate(approved);
   assert.deepEqual(approved.calls, [['abc', 'codeowner-review', 'success']]);
+});
+
+test('the pending approval label follows an approval wait', async () => {
+  const bot = [['pending:approval', 'github-actions[bot]']];
+  const pending = ['pending:approval'];
+  for (const [name, options, expected, change = () => {}] of [
+    ['approval wait', { reviews: [['owner', 'APPROVED']] }, [['createLabel', 'pending:approval'], ['addLabels', pending]]],
+    ['approved', { reviews: [['Friend', 'APPROVED']], labels: pending, labelEvents: bot }, [['removeLabel', 'pending:approval']]],
+    ['approved with a label a person added', { reviews: [['Friend', 'APPROVED']], labels: pending, labelEvents: [['pending:approval', 'someone']] }, []],
+    ['owner changes requested', { reviews: [['Friend', 'CHANGES_REQUESTED']], labels: pending, labelEvents: bot }, [['removeLabel', 'pending:approval']]],
+    ['moved head', { reviews: [['owner', 'APPROVED']] }, [], (live) => (live.head.sha = 'def')],
+  ]) {
+    const f = fixture({ author: 'owner', files: [PROMPT_FILE], ...options });
+    change(f.live);
+    await gate(f);
+    assert.deepEqual(f.labelCalls, expected, name);
+  }
+  const held = fixture({ author: 'owner', files: ['src/llm_prompts/cli.py'], copilotApproved: false, requested: ['Copilot'], labels: pending, labelEvents: bot });
+  await gate(held);
+  assert.deepEqual([held.calls, held.labelCalls], [[['abc', 'codeowner-review', 'pending']], []]);
 });
 
 test('exempt and unmatched files need no review', check('success', [

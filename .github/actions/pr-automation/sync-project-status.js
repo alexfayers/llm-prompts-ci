@@ -8,8 +8,18 @@ const STATUS_OPTION = {
   DONE: '98236657',
 };
 
+const REVIEWS = 'latestOpinionatedReviews(first: 50) { nodes { state authorCanPushToRepository } }';
+
 function isBlocked(pr) {
   return pr.reviewDecision === 'CHANGES_REQUESTED';
+}
+
+function writerReviews(pr) {
+  return (pr.latestOpinionatedReviews?.nodes ?? []).filter(({ authorCanPushToRepository }) => authorCanPushToRepository);
+}
+
+function changesRequested(pr, reviews) {
+  return isBlocked(pr) || reviews.some(({ state }) => state === 'CHANGES_REQUESTED');
 }
 
 async function hasReviewRequirements(github, repo, sha) {
@@ -38,7 +48,7 @@ async function fetchPr(github, { owner, repo, number }, extraFields = '') {
   const { repository } = await github.graphql(
     `query($owner: String!, $repo: String!, $number: Int!) {
       repository(owner: $owner, name: $repo) {
-        pullRequest(number: $number) { id number state isDraft reviewDecision latestOpinionatedReviews(first: 50) { nodes { state } } headRefOid labels(first: 50) { nodes { name } } ${extraFields} }
+        pullRequest(number: $number) { id number state isDraft reviewDecision ${REVIEWS} headRefOid labels(first: 50) { nodes { name } } ${extraFields} }
       }
     }`,
     { owner, repo, number }
@@ -117,4 +127,4 @@ async function sync({ github, context, core }) {
   await setStatus(github, pr, resolveStatus(pr, await hasReviewRequirements(github, context.repo, pr.headRefOid)));
 }
 
-module.exports = { findPullRequest, findPr, isReleasePr, fetchPr, isBlocked, hasReviewRequirements, resolveStatus, setStatus, sync };
+module.exports = { findPullRequest, findPr, isReleasePr, fetchPr, isBlocked, REVIEWS, writerReviews, changesRequested, hasReviewRequirements, resolveStatus, setStatus, sync };

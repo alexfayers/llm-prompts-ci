@@ -1,4 +1,5 @@
 const { isRenovate } = require('./label-pr.js');
+const { isBlockedLabel } = require('../blocked/blocked.js');
 const { hasReviewRequirements } = require('./sync-project-status.js');
 
 const ACTIVE_LABEL = { name: 'auto-rebase-active', color: '0e8a16', description: 'The next PR selected for merging on its base branch' };
@@ -20,7 +21,7 @@ const updateBranch = (method) => `mutation($id: ID!, $head: GitObjectID!) {
 const REBASE_BRANCH = updateBranch('REBASE');
 const MERGE_BRANCH = updateBranch('MERGE');
 const hasLabel = (pr, name) => pr.labels.nodes.some((label) => label.name === name);
-const excluded = (pr) => pr.state !== 'OPEN' || pr.isDraft || !pr.autoMergeRequest || isRenovate(pr.author?.login) || hasLabel(pr, 'blocked') || pr.mergeable === 'CONFLICTING' || pr.reviewDecision === 'CHANGES_REQUESTED' || pr.latestOpinionatedReviews?.nodes.some(({ state }) => state === 'CHANGES_REQUESTED');
+const excluded = (pr) => pr.state !== 'OPEN' || pr.isDraft || !pr.autoMergeRequest || isRenovate(pr.author?.login) || pr.labels.nodes.some(({ name }) => isBlockedLabel(name)) || pr.mergeable === 'CONFLICTING' || pr.reviewDecision === 'CHANGES_REQUESTED' || pr.latestOpinionatedReviews?.nodes.some(({ state }) => state === 'CHANGES_REQUESTED');
 const awaitingReview = (pr) => pr.reviewDecision === 'REVIEW_REQUIRED';
 const oldestFirst = (a, b) => a.createdAt.localeCompare(b.createdAt) || a.number - b.number;
 

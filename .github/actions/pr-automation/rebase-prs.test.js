@@ -96,7 +96,7 @@ test('required results block selection and release a definitely failed incumbent
     await rebase(args);
     assert.deepEqual(args.calls, [], String(conclusion));
   }
-  for (const override of [{}, { isDraft: true }, { autoMergeRequest: null }, { reviewDecision: null, latestOpinionatedReviews: { nodes: [{ state: 'CHANGES_REQUESTED' }] } }]) {
+  for (const override of [{}, { isDraft: true }, { autoMergeRequest: null }, { labels: { nodes: [...active.nodes, { name: 'blocked:checks' }] } }, { reviewDecision: null, latestOpinionatedReviews: { nodes: [{ state: 'CHANGES_REQUESTED' }] } }]) {
     const args = setup([pr(1, { labels: active, ...override }), pr(2)]);
     const original = args.github.paginate;
     args.github.paginate = async (endpoint, options) => endpoint === 'checks' && options.ref === 'oid1' && !Object.keys(override).length

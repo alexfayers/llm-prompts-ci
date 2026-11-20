@@ -1,7 +1,9 @@
-const { BLOCKED_LABEL, ensureLabel } = require('../pr-automation/label-pr.js');
+const { BLOCKED_LABEL, ensureLabel, labelledByBot, blockedLabel } = require('../pr-automation/label-pr.js');
 const { findPullRequest } = require('../pr-automation/sync-project-status.js');
+const { isBlockedLabel } = require('../blocked/blocked.js');
 const { DEPENDENCIES_CONTEXT, dependenciesPending, fetchPr, requiredCheckFailed, clearsBlock } = require('../pr-automation/label-conflicts.js');
 
+const DEPENDENCIES_LABEL = blockedLabel('dependencies', 'Open dependencies');
 const DISPATCH_EVENT = 'dependencies-recheck';
 const DEPENDENCY = /(?:depends on|blocked by)\s+(?:https:\/\/github\.com\/)?([\w.-]+\/[\w.-]+)?(?:#|\/(?:pull|issues)\/)(\d+)/gi;
 
@@ -20,8 +22,19 @@ async function canUnblock(github, context, delay, pr) {
   return clearsBlock(current, await requiredCheckFailed(github, context.repo, pr));
 }
 
-async function evaluate({ github, removeClient, context, core, delay }, pr) {
+async function unlabel(removeClient, target, name) {
+  try {
+    await removeClient.rest.issues.removeLabel({ ...target, name });
+  } catch (error) {
+    if (error.status !== 404) {
+      throw error;
+    }
+  }
+}
+
+async function evaluate({ github, removeClient, context, core, delay }, listed) {
   const { owner, repo } = context.repo;
+  const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: listed.number });
   const open = [];
   for (const [, slug, number] of (pr.body || '').matchAll(DEPENDENCY)) {
     const [depOwner, depRepo] = slug ? slug.split('/') : [owner, repo];
@@ -33,25 +46,24 @@ async function evaluate({ github, removeClient, context, core, delay }, pr) {
 
   const target = { owner, repo, issue_number: pr.number };
   await setStatus(github, context, pr, open.length > 0 ? 'pending' : 'success', open.length > 0 ? `Waiting on ${open.join(', ')}` : 'No open dependencies');
-  const labelled = pr.labels.some(({ name }) => name === BLOCKED_LABEL.name);
+  const names = pr.labels.map(({ name }) => name);
   if (open.length > 0) {
-    if (!labelled) {
-      await ensureLabel(github, core, context.repo, BLOCKED_LABEL);
-      await github.rest.issues.addLabels({ ...target, labels: [BLOCKED_LABEL.name] });
+    if (!names.includes(DEPENDENCIES_LABEL.name)) {
+      await ensureLabel(github, core, context.repo, DEPENDENCIES_LABEL);
+      await github.rest.issues.addLabels({ ...target, labels: [DEPENDENCIES_LABEL.name] });
     }
-  } else if (labelled && await canUnblock(github, context, delay, pr)) {
-    try {
-      await removeClient.rest.issues.removeLabel({ ...target, name: BLOCKED_LABEL.name });
-    } catch (error) {
-      if (error.status !== 404) {
-        throw error;
-      }
+  } else {
+    if (names.includes(DEPENDENCIES_LABEL.name) && await labelledByBot(github, target, DEPENDENCIES_LABEL.name)) {
+      await unlabel(removeClient, target, DEPENDENCIES_LABEL.name);
+    }
+    if (names.includes(BLOCKED_LABEL.name) && await canUnblock(github, context, delay, pr) && await labelledByBot(github, target, BLOCKED_LABEL.name)) {
+      await unlabel(removeClient, target, BLOCKED_LABEL.name);
     }
   }
 }
 
 async function isPending(github, context, pr) {
-  return pr.labels.some(({ name }) => name === BLOCKED_LABEL.name) || dependenciesPending(github, context.repo, pr.head.sha);
+  return pr.labels.some(({ name }) => isBlockedLabel(name)) || dependenciesPending(github, context.repo, pr.head.sha);
 }
 
 function dependsOn(pr, { owner, repo }, target) {

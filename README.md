@@ -12,6 +12,14 @@ Shared GitHub Actions for the llm-prompts, cline-hooks and mcp-memory repositori
 - A PR is blocked while it has the `blocked` label or a `blocked:<reason>` label.
 - `blocked.yml` fails when the event's PR has a blocked label. A caller runs it as job `unblocked` and gates a job with `needs: unblocked` only.
 - A blocked PR shows the `unblocked` job as failed and the gated jobs as skipped. The failure is the label, not a broken check.
+- Automation adds one label per reason:
+  - `blocked:dependencies`: a "Depends on" or "Blocked by" link is open.
+  - `blocked:conflicts`: the PR has merge conflicts.
+  - `blocked:checks`: a required check failed.
+  - `blocked:changes-requested`: the review decision is changes requested, or a reviewer with push access requested changes in their latest review. Only the latest 50 reviews are read.
+- `pending:approval` marks a PR waiting for a required approval. It does not block CI.
+- Automation removes a label only when the last `labeled` event for it came from automation. A label a person added stays. GitHub records no event when someone re-adds a label that is already there.
+- Review submissions and dismissals re-run labelling only in repos with a `pr-review.yml` relay.
 
 ## Releases
 

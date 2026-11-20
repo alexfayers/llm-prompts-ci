@@ -1,5 +1,6 @@
 const { findPullRequest } = require('./sync-project-status.js');
 const { copilotHold, isCopilotReview } = require('./copilot-review.js');
+const { syncLabel, PENDING_APPROVAL_LABEL } = require('./label-pr.js');
 
 const STATUS_CONTEXT = 'codeowner-review';
 const SAFE_BOT_BRANCHES = {
@@ -178,7 +179,13 @@ async function gate({ github, context, core, delay }) {
     await setStatus(github, context, pr, 'error', 'Code owner review check failed to run');
     throw error;
   }
-  if ((required ?? result)[0] === 'pending') {
+  const [state, description] = required ?? result;
+  const { data: current } = await github.rest.pulls.get({ ...context.repo, pull_number: pr.number });
+  if (current.head.sha === pr.head.sha) {
+    const names = current.labels.map(({ name }) => name);
+    await syncLabel({ github, core, target: { ...context.repo, issue_number: pr.number }, names, label: PENDING_APPROVAL_LABEL, active: state === 'pending' && description !== CHANGES_REQUESTED });
+  }
+  if (state === 'pending') {
     await requestOwners({ github, context, pr, owners: result[2], reviews: result[3] });
   }
 }
