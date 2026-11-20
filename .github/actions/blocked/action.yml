@@ -1,0 +1,23 @@
+name: Blocked
+description: Report whether the event's PR has a blocked label, either "blocked" or "blocked:<reason>". Reads only the event payload.
+inputs:
+  fail-when-blocked:
+    description: Set to "true" to fail the step when the PR has a blocked label.
+    required: false
+    default: 'false'
+outputs:
+  blocked:
+    description: '"true" when the PR has a blocked label, otherwise "false".'
+    value: ${{ steps.report.outputs.blocked }}
+runs:
+  using: composite
+  steps:
+    - id: report
+      uses: actions/github-script@v9
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        FAIL_WHEN_BLOCKED: ${{ inputs.fail-when-blocked }}
+      with:
+        script: |
+          const { report } = require(`${process.env.ACTION_PATH}/blocked.js`)
+          report({ context, core, failWhenBlocked: process.env.FAIL_WHEN_BLOCKED === 'true' })
