@@ -1,144 +1,189 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { isRebaseCandidate, rebase, rebaseLabelled } = require('./rebase-prs.js');
+const fs = require('node:fs');
+const path = require('node:path');
+const { rebase } = require('./rebase-prs.js');
 
-const eligible = {
-  mergeable: 'MERGEABLE',
-  labels: { nodes: [{ name: 'auto-rebase' }] },
-};
-
-test('labelled mergeable PR is a candidate', () => {
-  assert.equal(isRebaseCandidate(eligible), true);
-});
-
-test('PR without the auto-rebase label is rejected', () => {
-  assert.equal(isRebaseCandidate({ ...eligible, labels: { nodes: [] } }), false);
-});
-
-test('conflicting PR is rejected', () => {
-  assert.equal(isRebaseCandidate({ ...eligible, mergeable: 'CONFLICTING' }), false);
-});
-
-test('PR with unknown mergeability is a candidate', () => {
-  assert.equal(isRebaseCandidate({ ...eligible, mergeable: 'UNKNOWN' }), true);
-});
-
-const context = { repo: { owner: 'octo', repo: 'r' }, ref: 'refs/heads/main' };
+const context = { repo: { owner: 'octo', repo: 'r' }, ref: 'refs/heads/main', payload: {} };
 
 function pr(number, overrides = {}) {
-  return { ...eligible, id: `id${number}`, number, headRefOid: `oid${number}`, ...overrides };
+  return {
+    id: `id${number}`, number, headRefOid: `oid${number}`, baseRefName: 'main',
+    createdAt: `2026-01-${String(number).padStart(2, '0')}`, state: 'OPEN',
+    isDraft: false, autoMergeRequest: {}, mergeable: 'MERGEABLE',
+    reviewDecision: 'APPROVED', author: { login: 'builder' }, labels: { nodes: [] },
+    ...overrides,
+  };
 }
 
-function setup(nodes, failing = [], rebaseFailing = []) {
+function setup(nodes) {
   const calls = [];
-  const warnings = [];
   const github = {
-    graphql: async (query, vars) => {
-      calls.push({ query, vars });
-      if (query.includes('updatePullRequestBranch')) {
-        if (failing.includes(vars.id) || (rebaseFailing.includes(vars.id) && query.includes('REBASE'))) {
-          throw new Error('boom');
-        }
+    graphql: async (query, variables) => {
+      if (query.includes('mutation')) {
+        calls.push(['update', variables.id]);
         return {};
       }
-      return { repository: { pullRequests: { nodes } } };
+      if (query.includes('pullRequest(number:')) {
+        return { repository: { pullRequest: nodes.find((pr) => pr.number === variables.number) } };
+      }
+      return { repository: { pullRequests: { nodes, pageInfo: { hasNextPage: false } } } };
     },
-  };
-  const core = { info: () => {}, warning: (message) => warnings.push(message) };
-  return { calls, warnings, github, core };
-}
-
-test('open PRs are listed for the pushed base branch', async () => {
-  const { calls, github, core } = setup([]);
-  await rebase({ github, context, core });
-  assert.deepEqual(calls[0].vars, { owner: 'octo', repo: 'r', base: 'main' });
-});
-
-test('eligible PRs are rebased in order and others are skipped', async () => {
-  const { calls, github, core } = setup([pr(1), pr(2, { labels: { nodes: [] } }), pr(3)]);
-  await rebase({ github, context, core });
-  assert.deepEqual(
-    calls.slice(1).map((call) => call.vars),
-    [{ id: 'id1', head: 'oid1' }, { id: 'id3', head: 'oid3' }],
-  );
-});
-
-test('a failed rebase and merge warns and the remaining PRs are still rebased', async () => {
-  const { calls, warnings, github, core } = setup([pr(1), pr(3)], ['id1']);
-  await rebase({ github, context, core });
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /#1/);
-  assert.equal(calls.length, 4);
-  assert.deepEqual(calls[3].vars, { id: 'id3', head: 'oid3' });
-});
-
-test('a failed rebase falls back to a merge update', async () => {
-  const { calls, warnings, github, core } = setup([pr(1)], [], ['id1']);
-  await rebase({ github, context, core });
-  assert.equal(calls.length, 3);
-  assert.match(calls[2].query, /updateMethod: MERGE/);
-  assert.deepEqual(calls[2].vars, { id: 'id1', head: 'oid1' });
-  assert.equal(warnings.length, 0);
-});
-
-test('Renovate PRs are not rebased', async () => {
-  for (const login of ['renovate', 'renovate[bot]', 'app/renovate']) {
-    const { calls, github, core } = setup([pr(1, { author: { login } }), pr(2, { author: { login: 'alice' } })]);
-    await rebase({ github, context, core });
-    assert.deepEqual(calls.slice(1).map((call) => call.vars), [{ id: 'id2', head: 'oid2' }], login);
-  }
-});
-
-test('no candidates runs only the list query', async () => {
-  const { calls, github, core } = setup([pr(1, { mergeable: 'CONFLICTING' })]);
-  await rebase({ github, context, core });
-  assert.equal(calls.length, 1);
-});
-
-const labelContext = { repo: { owner: 'octo', repo: 'r' }, payload: { pull_request: { number: 7 } } };
-
-function setupLabelled(behindBy) {
-  const calls = [];
-  const github = {
-    graphql: async (query, vars) => {
-      calls.push({ query, vars });
-      return query.includes('updatePullRequestBranch') ? {} : { repository: { pullRequest: pr(7, { baseRefName: 'main' }) } };
+    paginate: async (endpoint) => {
+      if (endpoint === 'rules') return [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'test' }] } }];
+      if (endpoint === 'checks') return [{ name: 'test', status: 'completed', conclusion: 'success', started_at: '2026-01-01', app: { id: 1 } }];
+      if (endpoint === 'statuses') return [{ context: 'codeowner-review', state: 'success' }];
+      return [];
     },
     rest: {
       repos: {
-        compareCommitsWithBasehead: async (params) => {
-          calls.push({ compare: params });
-          return { data: { behind_by: behindBy } };
+        getBranchRules: 'rules', listCommitStatusesForRef: 'statuses',
+        getCombinedStatusForRef: async () => ({ data: { statuses: [{ context: 'codeowner-review', state: 'success' }] } }),
+        compareCommitsWithBasehead: async () => ({ data: { behind_by: 1 } }),
+      },
+      checks: { listForRef: 'checks' },
+      issues: {
+        listForRepo: 'active',
+        createLabel: async () => {},
+        addLabels: async ({ issue_number }) => {
+          calls.push(['claim', issue_number]);
+          nodes.find((pr) => pr.number === issue_number).labels = { nodes: [{ name: 'auto-rebase-active' }] };
         },
+        removeLabel: async ({ issue_number }) => { calls.push(['release', issue_number]); },
       },
     },
   };
-  return { calls, github };
+  const core = { info: () => {}, warning: () => {} };
+  return { github, context, core, calls };
 }
 
-test('a labelled PR that is behind is rebased', async () => {
-  const { calls, github } = setupLabelled(2);
-  await rebaseLabelled({ github, context: labelContext, core: {} });
-  assert.deepEqual(calls[1].compare, { owner: 'octo', repo: 'r', basehead: 'main...oid7' });
-  assert.deepEqual(calls[2].vars, { id: 'id7', head: 'oid7' });
+const active = { nodes: [{ name: 'auto-rebase-active' }] };
+
+test('a pending incumbent holds its place ahead of ready PRs', async () => {
+  for (const conclusion of ['success', null]) {
+    const args = setup([pr(1), pr(2, { labels: active, reviewDecision: 'REVIEW_REQUIRED' })]);
+    const paginate = args.github.paginate;
+    args.github.paginate = async (endpoint, options) => endpoint === 'checks' && options.ref === 'oid2'
+      ? [{ name: 'test', status: 'completed', conclusion }]
+      : paginate(endpoint, options);
+    args.github.rest.repos.getCombinedStatusForRef = async ({ ref }) => ({ data: { statuses: [{ context: 'codeowner-review', state: ref === 'oid2' ? 'pending' : 'success' }] } });
+    args.github.rest.repos.compareCommitsWithBasehead = async () => ({ data: { behind_by: 0 } });
+    await rebase(args);
+    assert.deepEqual(args.calls, []);
+  }
 });
 
-test('a labelled PR that is up to date is not rebased', async () => {
-  const { calls, github } = setupLabelled(0);
-  await rebaseLabelled({ github, context: labelContext, core: {} });
-  assert.equal(calls.length, 2);
+test('a PR awaiting required review is not newly selected and its retained slot gets no update', async () => {
+  const initial = setup([pr(1, { reviewDecision: 'REVIEW_REQUIRED' }), pr(2, { reviewDecision: null })]);
+  await rebase(initial);
+  assert.deepEqual(initial.calls, [['claim', 2], ['update', 'id2']]);
+
+  const incumbent = setup([pr(1, { labels: active, reviewDecision: 'REVIEW_REQUIRED' }), pr(2)]);
+  await rebase(incumbent);
+  assert.deepEqual(incumbent.calls, []);
 });
 
-test('a review relay run rebases the PR matching its head sha', async () => {
-  const { calls, github } = setupLabelled(2);
-  github.paginate = async () => [{ number: 7, head: { sha: 'abc', ref: 'fix', repo: { full_name: 'fork/r' } } }];
-  github.rest.pulls = { list: {} };
-  await rebaseLabelled({ github, context: { ...labelContext, payload: { workflow_run: { head_sha: 'abc', head_branch: 'fix', head_repository: { full_name: 'fork/r' } } } }, core: {} });
-  assert.deepEqual(calls[2].vars, { id: 'id7', head: 'oid7' });
+test('required results block selection and release a definitely failed incumbent', async () => {
+  for (const conclusion of [null, 'failure', 'cancelled', 'action_required', 'timed_out', 'startup_failure']) {
+    const args = setup([pr(1)]);
+    const original = args.github.paginate;
+    args.github.paginate = async (endpoint, options) => endpoint === 'checks'
+      ? [
+        { id: 2, name: 'test', status: conclusion ? 'completed' : 'queued', conclusion, started_at: null, app: { id: 1 } },
+        { id: 1, name: 'test', status: 'completed', conclusion: 'success', started_at: '2026-01-01', app: { id: 1 } },
+      ]
+      : original(endpoint, options);
+    await rebase(args);
+    assert.deepEqual(args.calls, [], String(conclusion));
+  }
+  for (const override of [{}, { isDraft: true }, { autoMergeRequest: null }, { reviewDecision: null, latestOpinionatedReviews: { nodes: [{ state: 'CHANGES_REQUESTED' }] } }]) {
+    const args = setup([pr(1, { labels: active, ...override }), pr(2)]);
+    const original = args.github.paginate;
+    args.github.paginate = async (endpoint, options) => endpoint === 'checks' && options.ref === 'oid1' && !Object.keys(override).length
+      ? [{ name: 'test', status: 'completed', conclusion: 'failure', started_at: '2026-01-01', app: { id: 1 } }]
+      : original(endpoint, options);
+    await rebase(args);
+    assert.deepEqual(args.calls, [['release', 1], ['claim', 2], ['update', 'id2']]);
+  }
+});
 
-  const none = setupLabelled(2);
-  none.github.paginate = async () => [];
-  none.github.rest.pulls = { list: {} };
-  await rebaseLabelled({ github: none.github, context: { ...labelContext, payload: { workflow_run: { head_sha: 'abc', head_branch: 'fix', head_repository: { full_name: 'fork/r' } } } }, core: {} });
-  assert.deepEqual(none.calls, []);
+test('required commit statuses and check runs use the latest matching app result', async () => {
+  for (const state of ['success', 'pending', 'failure', 'error']) {
+    const args = setup([pr(1)]);
+    const original = args.github.paginate;
+    args.github.paginate = async (endpoint, options) => {
+      if (endpoint === 'rules') return [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'dependencies', integration_id: 7 }] } }];
+      if (endpoint === 'checks') return [{ name: 'dependencies', status: 'completed', conclusion: 'success', app: { id: 8 } }];
+      if (endpoint === 'statuses') return [
+        { context: 'dependencies', state: 'success', creator: { type: 'Bot', login: 'other[bot]' }, id: 3 },
+        { context: 'dependencies', state, creator: { type: 'Bot', login: 'ci[bot]' }, id: 2 },
+        { context: 'dependencies', state: 'success', creator: { type: 'Bot', login: 'ci[bot]' }, id: 1 },
+      ];
+      return original(endpoint, options);
+    };
+    args.github.request = async (_, { app_slug }) => ({ data: { id: app_slug === 'ci' ? 7 : 8 } });
+    await rebase(args);
+    assert.deepEqual(args.calls, state === 'success' ? [['claim', 1], ['update', 'id1']] : [], state);
+  }
+});
+
+test('paginated candidates retain one active PR and clean closed and duplicate claims', async () => {
+  const nodes = [pr(1, { isDraft: true }), pr(2, { state: 'CLOSED', labels: active }), pr(3, { labels: active }), pr(4, { labels: active })];
+  const args = setup(nodes);
+  const query = args.github.graphql;
+  args.github.graphql = async (text, variables) => text.includes('pullRequests(')
+    ? { repository: { pullRequests: { nodes: variables.cursor ? nodes.slice(2) : [nodes[0]], pageInfo: { hasNextPage: !variables.cursor, endCursor: 'next' } } } }
+    : query(text, variables);
+  const paginate = args.github.paginate;
+  args.github.paginate = async (endpoint, options) => endpoint === 'active' ? [{ number: 2, pull_request: {} }] : paginate(endpoint, options);
+  await rebase(args);
+  assert.deepEqual(args.calls, [['release', 2], ['release', 4], ['update', 'id3']]);
+});
+
+test('acquisition and revalidation protect branch updates and preserve the exact-head fallback', async () => {
+  const acquisition = setup([pr(1), pr(2)]);
+  acquisition.github.rest.issues.addLabels = async () => { throw new Error('claim failed'); };
+  await assert.rejects(rebase(acquisition), /claim failed/);
+  assert.deepEqual(acquisition.calls, []);
+
+  for (const override of [{ headRefOid: 'changed' }, { baseRefName: 'release' }, { isDraft: true }, { autoMergeRequest: null }, { reviewDecision: 'CHANGES_REQUESTED' }, { mergeable: 'UNKNOWN' }]) {
+    const args = setup([pr(1), pr(2)]);
+    const query = args.github.graphql;
+    args.github.graphql = async (text, variables) => text.includes('pullRequest(number:')
+      ? { repository: { pullRequest: { ...pr(1, { labels: active }), ...override } } }
+      : query(text, variables);
+    await rebase(args);
+    assert.deepEqual(args.calls, [['claim', 1]]);
+  }
+
+  const args = setup([pr(1), pr(2)]);
+  const query = args.github.graphql;
+  args.github.graphql = async (text, variables) => {
+    if (!text.includes('mutation')) return query(text, variables);
+    args.calls.push([text.includes('REBASE') ? 'rebase' : 'merge', variables.id, variables.head]);
+    throw new Error('update failed');
+  };
+  await rebase(args);
+  assert.deepEqual(args.calls, [['claim', 1], ['rebase', 'id1', 'oid1'], ['merge', 'id1', 'oid1']]);
+});
+
+test('the serialized selector replaces both update paths and receives recovery events', () => {
+  const read = (file) => fs.readFileSync(path.join(__dirname, '../..', file), 'utf8');
+  const action = fs.readFileSync(path.join(__dirname, 'action.yml'), 'utf8');
+  assert.doesNotMatch(action, /rebase-prs.js/);
+  assert.match(action, /if: github.event_name == 'pull_request_target'\n      uses: actions\/labeler/);
+  const reusable = read('workflows/pr-automation.yml');
+  assert.match(reusable, /needs: automate/);
+  assert.match(reusable, /group: auto-rebase-\$\{\{ github.repository \}\}/);
+  assert.match(reusable, /cancel-in-progress: false/);
+  assert.match(reusable, /if: github.event_name != 'schedule'/);
+  assert.match(read('workflows/project-automation.yml'), /auto_merge_disabled/);
+  assert.match(read('workflows/project-automation.yml'), /schedule:/);
+  assert.match(read('workflows/sync-shared-files.yml'), /target\/\.github\/workflows\/project-automation.yml/);
+});
+
+test('only the oldest currently ready PR is claimed and updated', async () => {
+  const args = setup([pr(2), pr(1), pr(3, { isDraft: true, labels: { nodes: [{ name: 'auto-rebase' }] } })]);
+  await rebase(args);
+  assert.deepEqual(args.calls, [['claim', 1], ['update', 'id1']]);
 });
