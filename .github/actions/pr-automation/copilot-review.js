@@ -129,4 +129,12 @@ async function waitForReview({ github, context, delay = sleep }) {
   return false;
 }
 
-module.exports = { copilotHold, holdAutoMerge, waitForReview, isCopilotReview };
+async function copilotWaitAnswered({ github, context, pr, status }) {
+  if (status?.state !== WAITING[0] || status.description !== WAITING[1]) {
+    return false;
+  }
+  const reviews = await github.paginate(github.rest.pulls.listReviews, { ...context.repo, pull_number: pr.number, per_page: 100 });
+  return reviews.some((review) => isCopilotReview(review) && review.commit_id === pr.head.sha);
+}
+
+module.exports = { copilotHold, holdAutoMerge, waitForReview, isCopilotReview, copilotWaitAnswered };

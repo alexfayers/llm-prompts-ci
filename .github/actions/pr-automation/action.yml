@@ -1,5 +1,5 @@
 name: PR automation
-description: Sync a public repo's PR status onto the llm-prompts ecosystem project board, enable squash auto-merge on ready contribute PRs, apply a breaking label from the PR title or body, label PRs with requested changes as blocked:changes-requested, label PRs with merge conflicts as blocked:conflicts and failing required checks as blocked:checks, apply path-based area labels, report a codeowner-review commit status that waits for a requested Copilot review, label PRs waiting for an approval as pending:approval and request the needed owners' review, and label PRs ready to auto-rebase.
+description: Sync a public repo's PR status onto the llm-prompts ecosystem project board, enable squash auto-merge on ready contribute PRs, apply a breaking label from the PR title or body, label PRs with requested changes as blocked:changes-requested, label PRs with merge conflicts as blocked:conflicts and failing required checks as blocked:checks, apply path-based area labels, report a codeowner-review commit status that waits for a requested Copilot review, refresh answered waits on a schedule without requesting reviews, label PRs waiting for an approval as pending:approval and request the needed owners' review, and label PRs ready to auto-rebase.
 inputs:
   automation-token:
     description: Token for enabling auto-merge and for removing blocked labels. Unlike github.token, it makes these changes start new workflow runs. In a private repo, scope the token to that repo only.
@@ -50,6 +50,20 @@ runs:
         script: |
           const { gate } = require(`${process.env.ACTION_PATH}/codeowner-review.js`)
           await gate({ github, context, core })
+
+    - name: Refresh answered Copilot review waits
+      if: github.event_name == 'schedule'
+      continue-on-error: true
+      uses: actions/github-script@v9
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        REVIEW_OWNERS: ${{ inputs.review-owners }}
+      with:
+        retries: 3
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const { recover } = require(`${process.env.ACTION_PATH}/codeowner-review.js`)
+          await recover({ github, context, core })
 
     - name: Enable squash auto-merge
       if: |
