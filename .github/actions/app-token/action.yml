@@ -20,6 +20,12 @@ outputs:
   token:
     description: The app installation token, or the fallback token.
     value: ${{ steps.mint.outputs.token || inputs.fallback-token }}
+  app-slug:
+    description: Slug of the GitHub App that minted the token. Empty when the fallback token is returned.
+    value: ${{ steps.mint.outputs.app-slug }}
+  installation-id:
+    description: ID of the app installation that minted the token. Empty when the fallback token is returned.
+    value: ${{ steps.mint.outputs.installation-id }}
 runs:
   using: composite
   steps:

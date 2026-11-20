@@ -1,0 +1,35 @@
+name: App identity
+
+on:
+  push:
+    paths:
+      - .github/workflows/app-identity.yml
+
+jobs:
+  releaser:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: [llm-prompts, cline-hooks, mcp-memory]
+    steps:
+      - uses: actions/checkout@v7
+      - id: releaser
+        uses: ./.github/actions/app-token
+        with:
+          client-id: ${{ secrets.RELEASER_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASER_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ matrix.repo }}
+      - uses: actions/github-script@v9
+        env:
+          APP_CLIENT_ID: ${{ secrets.RELEASER_CLIENT_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.RELEASER_PRIVATE_KEY }}
+          APP_SLUG: ${{ steps.releaser.outputs.app-slug }}
+          INSTALLATION_ID: ${{ steps.releaser.outputs.installation-id }}
+        with:
+          script: |
+            const { reportPermissions } = require('./.github/scripts/app-identity/permissions.js')
+            await reportPermissions({ core })
