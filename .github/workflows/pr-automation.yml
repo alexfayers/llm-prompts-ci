@@ -29,7 +29,6 @@ on:
 
 jobs:
   automate:
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     permissions:
       checks: read

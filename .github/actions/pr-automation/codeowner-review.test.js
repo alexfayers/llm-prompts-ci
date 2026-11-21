@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { gate } = require('./codeowner-review.js');
+const { gate, recover } = require('./codeowner-review.js');
 
 process.env.REVIEW_OWNERS = '/prompts/ @alice bob';
 
@@ -45,6 +45,76 @@ function fixture({ author, files, reviews = [], labels = [], branch = 'feature',
   const context = { eventName, repo: { owner: 'owner', repo: 'r' }, payload: { pull_request: structuredClone(live) } };
   return { github, context, core: { warning: (message) => warnings.push(message) }, calls, labelCalls, requests, warnings, live };
 }
+
+function scheduled(options = {}) {
+  const f = fixture({ author: 'owner', files: ['src/llm_prompts/cli.py'], eventName: 'schedule', ...options });
+  f.github.rest.pulls.list = { items: [structuredClone(f.live)] };
+  f.github.rest.repos.getCombinedStatusForRef = async () => ({ data: { statuses: [{ context: 'codeowner-review', state: 'pending', description: 'Waiting for the requested Copilot review' }] } });
+  f.github.rest.repos.createCommitStatus = async ({ sha, context, state, description }) => f.calls.push([sha, context, state, description]);
+  return f;
+}
+
+test('scheduled recovery refreshes an answered Copilot wait without requesting reviews', async () => {
+  const f = scheduled();
+  await recover(f);
+  assert.deepEqual(f.calls, [['abc', 'codeowner-review', 'success', 'No code owner review needed']]);
+  assert.deepEqual(f.requests, []);
+});
+
+test('scheduled recovery leaves unanswered waits and other statuses unchanged', async () => {
+  for (const [name, options, change = () => {}] of [
+    ['old head review', { copilotApproved: false, reviews: [['copilot', 'APPROVED', true, 'old']] }],
+    ['no review', { copilotApproved: false }],
+    ['draft', { draft: true }],
+    ['owner wait', {}, (f) => (f.github.rest.repos.getCombinedStatusForRef = async () => ({ data: { statuses: [{ context: 'codeowner-review', state: 'pending', description: 'Needs a code owner approval' }] } }))],
+    ['non-pending status', {}, (f) => (f.github.rest.repos.getCombinedStatusForRef = async () => ({ data: { statuses: [{ context: 'codeowner-review', state: 'error', description: 'Waiting for the requested Copilot review' }] } }))],
+    ['no status', {}, (f) => (f.github.rest.repos.getCombinedStatusForRef = async () => ({ data: { statuses: [] } }))],
+  ]) {
+    const f = scheduled(options);
+    change(f);
+    await recover(f);
+    assert.deepEqual(f.calls, [], name);
+    assert.deepEqual(f.labelCalls, [], name);
+    assert.deepEqual(f.requests, [], name);
+  }
+});
+
+test('scheduled recovery labels an owner approval wait without requesting an owner', async () => {
+  const f = scheduled({ author: 'stranger', files: [OWNED_FILE], copilotComments: [{ id: 1 }] });
+  await recover(f);
+  assert.deepEqual(f.calls, [['abc', 'codeowner-review', 'pending', 'Needs an owner approval']]);
+  assert.deepEqual(f.labelCalls, [['createLabel', 'pending:approval'], ['addLabels', ['pending:approval']]]);
+  assert.deepEqual(f.requests, []);
+});
+
+test('scheduled recovery writes only the listed head and skips labels after a push', async () => {
+  const f = scheduled({ author: 'stranger', files: [OWNED_FILE], copilotComments: [{ id: 1 }] });
+  f.live.head.sha = 'def';
+  await recover(f);
+  assert.deepEqual(f.calls, [['abc', 'codeowner-review', 'pending', 'Needs an owner approval']]);
+  assert.deepEqual(f.labelCalls, []);
+  assert.deepEqual(f.requests, []);
+});
+
+test('scheduled recovery warns on a PR failure and refreshes later PRs without an error status', async () => {
+  for (const method of ['getCombinedStatusForRef', 'createCommitStatus']) {
+    const f = scheduled();
+    const next = structuredClone(f.live);
+    next.number = 8;
+    next.head.sha = 'def';
+    f.github.rest.pulls.list.items.push(next);
+    f.github.rest.pulls.listReviews.items.push({ ...f.github.rest.pulls.listReviews.items[0], commit_id: 'def' });
+    const original = f.github.rest.repos[method];
+    f.github.rest.repos[method] = async (args) => {
+      if ((args.ref ?? args.sha) === 'abc') throw new Error('boom');
+      return original(args);
+    };
+    await recover(f);
+    assert.deepEqual(f.warnings, ['Failed to refresh codeowner-review on #7: boom'], method);
+    assert.deepEqual(f.calls, [['def', 'codeowner-review', 'success', 'No code owner review needed']], method);
+    assert.deepEqual(f.requests, [], method);
+  }
+});
 
 const PROMPT_FILE = 'src/llm_prompts/prompts/shared/rules/a.md';
 const OWNED_FILE = 'prompts/a.md';

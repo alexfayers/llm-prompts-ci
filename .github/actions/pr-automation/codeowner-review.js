@@ -1,8 +1,7 @@
-const { findPullRequest } = require('./sync-project-status.js');
-const { copilotHold, isCopilotReview } = require('./copilot-review.js');
+const { findPullRequest, CODEOWNER_REVIEW_CONTEXT: STATUS_CONTEXT } = require('./sync-project-status.js');
+const { copilotHold, isCopilotReview, copilotWaitAnswered } = require('./copilot-review.js');
 const { syncLabel, PENDING_APPROVAL_LABEL } = require('./label-pr.js');
 
-const STATUS_CONTEXT = 'codeowner-review';
 const SAFE_BOT_BRANCHES = {
   'renovate[bot]': ['renovate/all-minor-patch', 'renovate/github-actions', 'renovate/lock-file-maintenance', 'renovate/pi-extensions'],
   'alexfayers-auto-cd[bot]': ['bot/shared-files', 'release-please--branches--main'],
@@ -163,7 +162,6 @@ async function gate({ github, context, core, delay }) {
     return;
   }
   let result;
-  let required;
   try {
     const hold = isSafeBotPr(pr) ? [] : await copilotHold({ github, context, core, pr, delay, setPending: (description) => setStatus(github, context, pr, 'pending', description) });
     if (hold?.length) {
@@ -172,22 +170,50 @@ async function gate({ github, context, core, delay }) {
     if (!hold || hold.length) {
       return;
     }
-    result = await evaluate({ github, context, pr });
-    required = result[0] === 'success' && !result[4] ? await evaluateMinReviews({ github, context, pr }) : null;
-    await setStatus(github, context, pr, ...(required ?? result.slice(0, 2)));
+    result = await setReviewStatus({ github, context, pr });
   } catch (error) {
     await setStatus(github, context, pr, 'error', 'Code owner review check failed to run');
     throw error;
   }
-  const [state, description] = required ?? result;
-  const { data: current } = await github.rest.pulls.get({ ...context.repo, pull_number: pr.number });
-  if (current.head.sha === pr.head.sha) {
-    const names = current.labels.map(({ name }) => name);
-    await syncLabel({ github, core, target: { ...context.repo, issue_number: pr.number }, names, label: PENDING_APPROVAL_LABEL, active: state === 'pending' && description !== CHANGES_REQUESTED });
-  }
+  const [state, description] = result;
+  await syncPendingLabel({ github, context, core, pr, state, description });
   if (state === 'pending') {
     await requestOwners({ github, context, pr, owners: result[2], reviews: result[3] });
   }
 }
 
-module.exports = { gate, setStatus };
+async function syncPendingLabel({ github, context, core, pr, state, description }) {
+  const { data: current } = await github.rest.pulls.get({ ...context.repo, pull_number: pr.number });
+  if (current.head.sha === pr.head.sha) {
+    const names = current.labels.map(({ name }) => name);
+    await syncLabel({ github, core, target: { ...context.repo, issue_number: pr.number }, names, label: PENDING_APPROVAL_LABEL, active: state === 'pending' && description !== CHANGES_REQUESTED });
+  }
+}
+
+async function setReviewStatus({ github, context, pr }) {
+  const result = await evaluate({ github, context, pr });
+  const status = (result[0] === 'success' && !result[4] ? await evaluateMinReviews({ github, context, pr }) : null) ?? result.slice(0, 2);
+  await setStatus(github, context, pr, ...status);
+  return [...status, result[2], result[3]];
+}
+
+async function recover({ github, context, core }) {
+  const prs = await github.paginate(github.rest.pulls.list, { ...context.repo, state: 'open', per_page: 100 });
+  for (const pr of prs) {
+    if (pr.draft) {
+      continue;
+    }
+    try {
+      const { data: { statuses } } = await github.rest.repos.getCombinedStatusForRef({ ...context.repo, ref: pr.head.sha });
+      const status = statuses.find(({ context }) => context === STATUS_CONTEXT);
+      if (await copilotWaitAnswered({ github, context, pr, status })) {
+        const [state, description] = await setReviewStatus({ github, context, pr });
+        await syncPendingLabel({ github, context, core, pr, state, description });
+      }
+    } catch (error) {
+      core.warning(`Failed to refresh ${STATUS_CONTEXT} on #${pr.number}: ${error.message}`);
+    }
+  }
+}
+
+module.exports = { gate, setStatus, recover };

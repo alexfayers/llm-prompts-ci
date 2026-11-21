@@ -9,6 +9,7 @@ const STATUS_OPTION = {
 };
 
 const REVIEWS = 'latestOpinionatedReviews(first: 50) { nodes { state authorCanPushToRepository } }';
+const CODEOWNER_REVIEW_CONTEXT = 'codeowner-review';
 
 function isBlocked(pr) {
   return pr.reviewDecision === 'CHANGES_REQUESTED';
@@ -24,7 +25,7 @@ function changesRequested(pr, reviews) {
 
 async function hasReviewRequirements(github, repo, sha) {
   const { data: { statuses } } = await github.rest.repos.getCombinedStatusForRef({ ...repo, ref: sha });
-  return statuses.some(({ context, state }) => context === 'codeowner-review' && state === 'success');
+  return statuses.some(({ context, state }) => context === CODEOWNER_REVIEW_CONTEXT && state === 'success');
 }
 
 function isApproved(pr, requirementsMet) {
@@ -127,4 +128,4 @@ async function sync({ github, context, core }) {
   await setStatus(github, pr, resolveStatus(pr, await hasReviewRequirements(github, context.repo, pr.headRefOid)));
 }
 
-module.exports = { findPullRequest, findPr, isReleasePr, fetchPr, isBlocked, REVIEWS, writerReviews, changesRequested, hasReviewRequirements, resolveStatus, setStatus, sync };
+module.exports = { findPullRequest, findPr, isReleasePr, fetchPr, isBlocked, REVIEWS, CODEOWNER_REVIEW_CONTEXT, writerReviews, changesRequested, hasReviewRequirements, resolveStatus, setStatus, sync };

@@ -176,7 +176,9 @@ test('the serialized selector replaces both update paths and receives recovery e
   assert.match(reusable, /needs: automate/);
   assert.match(reusable, /group: auto-rebase-\$\{\{ github.repository \}\}/);
   assert.match(reusable, /cancel-in-progress: false/);
-  assert.match(reusable, /if: github.event_name != 'schedule'/);
+  assert.doesNotMatch(reusable, /if: github.event_name != 'schedule'/);
+  assert.match(action, /- name: Refresh answered Copilot review waits\n      if: github.event_name == 'schedule'\n      continue-on-error: true\n      uses: actions\/github-script@v9/);
+  assert.match(action, /const \{ recover \} = require\(`\$\{process.env.ACTION_PATH\}\/codeowner-review.js`\)\n          await recover\(\{ github, context, core \}\)/);
   assert.match(read('workflows/project-automation.yml'), /auto_merge_disabled/);
   assert.match(read('workflows/project-automation.yml'), /schedule:/);
   assert.match(read('workflows/sync-shared-files.yml'), /target\/\.github\/workflows\/project-automation.yml/);
