@@ -30,7 +30,7 @@ Shared GitHub Actions for the llm-prompts, cline-hooks and mcp-memory repositori
 ## PR rebases
 
 - Each base branch has one active PR, marked `auto-rebase-active`.
-- Selection uses current auto-merge, review and required-check results, not the retained `auto-rebase` label.
+- Selection uses current auto-merge, review, required conversation resolution and required-check results, not the retained `auto-rebase` label.
 - Pending checks keep the active PR selected. Closed PRs and definite blockers release the selection.
 - Only the selected PR updates its branch. Strict required-check freshness is unchanged.
 - Scheduled runs refresh `codeowner-review` waits answered by Copilot on the current head without requesting reviews.
