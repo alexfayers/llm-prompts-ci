@@ -3,7 +3,7 @@ const { isBlockedLabel } = require('../blocked/blocked.js');
 const { hasReviewRequirements } = require('./sync-project-status.js');
 
 const ACTIVE_LABEL = { name: 'auto-rebase-active', color: '0e8a16', description: 'The next PR selected for merging on its base branch' };
-const PR_FIELDS = 'id number state createdAt baseRefName headRefOid isDraft mergeable reviewDecision latestOpinionatedReviews(first: 100) { nodes { state } pageInfo { hasNextPage } } autoMergeRequest { enabledAt } author { login } labels(first: 100) { nodes { name } pageInfo { hasNextPage } }';
+const PR_FIELDS = 'id number state createdAt baseRefName headRefOid isDraft mergeable reviewDecision latestOpinionatedReviews(first: 100) { nodes { state } pageInfo { hasNextPage } } autoMergeRequest { enabledAt } author { login } labels(first: 100) { nodes { name } pageInfo { hasNextPage } } reviewThreads(first: 100) { nodes { isResolved } pageInfo { hasNextPage } }';
 const LIST_OPEN_PRS = `query($owner: String!, $repo: String!, $cursor: String) {
   repository(owner: $owner, name: $repo) {
     pullRequests(states: OPEN, first: 100, after: $cursor) {
@@ -40,8 +40,9 @@ async function rebaseBranch(github, core, pr) {
   }
 }
 
-async function requiredChecks(github, repo, pr) {
+async function requiredResults(github, repo, pr) {
   const rules = await github.paginate(github.rest.repos.getBranchRules, { ...repo, branch: pr.baseRefName, per_page: 100 });
+  if (rules.some(({ type, parameters }) => type === 'pull_request' && parameters.required_review_thread_resolution) && pr.reviewThreads.nodes.some(({ isResolved }) => !isResolved)) return 'failure';
   const required = rules.filter(({ type }) => type === 'required_status_checks').flatMap(({ parameters }) => parameters.required_status_checks);
   if (!required.length) return 'success';
   const [runs, statuses] = await Promise.all([
@@ -83,7 +84,7 @@ async function rebase({ github, context, core }) {
   let cursor = null;
   do {
     const { repository: { pullRequests } } = await github.graphql(LIST_OPEN_PRS, { ...context.repo, cursor });
-    if (pullRequests.nodes.some((pr) => pr.labels.pageInfo?.hasNextPage || pr.latestOpinionatedReviews?.pageInfo?.hasNextPage) || (pullRequests.pageInfo.hasNextPage && !pullRequests.pageInfo.endCursor)) {
+    if (pullRequests.nodes.some((pr) => pr.labels.pageInfo?.hasNextPage || pr.latestOpinionatedReviews?.pageInfo?.hasNextPage || pr.reviewThreads?.pageInfo?.hasNextPage) || (pullRequests.pageInfo.hasNextPage && !pullRequests.pageInfo.endCursor)) {
       throw new Error('Incomplete PR metadata; retaining the current rebase selection');
     }
     nodes.push(...pullRequests.nodes);
@@ -103,7 +104,7 @@ async function rebase({ github, context, core }) {
     const incumbents = ordered.filter((pr) => hasLabel(pr, ACTIVE_LABEL.name));
     let selected;
     for (const pr of incumbents) {
-      if (!excluded(pr) && await requiredChecks(github, context.repo, pr) !== 'failure') {
+      if (!excluded(pr) && await requiredResults(github, context.repo, pr) !== 'failure') {
         selected = pr;
         break;
       }
@@ -113,7 +114,7 @@ async function rebase({ github, context, core }) {
     }
     if (!selected) {
       for (const pr of ordered) {
-        if (!excluded(pr) && !awaitingReview(pr) && pr.mergeable === 'MERGEABLE' && await hasReviewRequirements(github, context.repo, pr.headRefOid) && await requiredChecks(github, context.repo, pr) === 'success') {
+        if (!excluded(pr) && !awaitingReview(pr) && pr.mergeable === 'MERGEABLE' && await hasReviewRequirements(github, context.repo, pr.headRefOid) && await requiredResults(github, context.repo, pr) === 'success') {
           selected = pr;
           break;
         }
@@ -128,9 +129,9 @@ async function rebase({ github, context, core }) {
     }
     const { repository: current } = await github.graphql(GET_PR, { ...context.repo, number: selected.number });
     const pr = current.pullRequest;
-    if (!pr || pr.labels.pageInfo?.hasNextPage || pr.latestOpinionatedReviews?.pageInfo?.hasNextPage) throw new Error(`Cannot revalidate active PR #${selected.number}`);
+    if (!pr || pr.labels.pageInfo?.hasNextPage || pr.latestOpinionatedReviews?.pageInfo?.hasNextPage || pr.reviewThreads?.pageInfo?.hasNextPage) throw new Error(`Cannot revalidate active PR #${selected.number}`);
     if (excluded(pr) || awaitingReview(pr) || !hasLabel(pr, ACTIVE_LABEL.name) || pr.mergeable !== 'MERGEABLE' || pr.baseRefName !== base || pr.headRefOid !== selected.headRefOid) continue;
-    if (await requiredChecks(github, context.repo, pr) !== 'success' || !await hasReviewRequirements(github, context.repo, pr.headRefOid)) continue;
+    if (await requiredResults(github, context.repo, pr) !== 'success' || !await hasReviewRequirements(github, context.repo, pr.headRefOid)) continue;
     const { data: { behind_by: behind } } = await github.rest.repos.compareCommitsWithBasehead({ ...context.repo, basehead: `${base}...${pr.headRefOid}` });
     if (behind > 0) await rebaseBranch(github, core, pr);
   }

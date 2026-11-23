@@ -12,6 +12,7 @@ function pr(number, overrides = {}) {
     createdAt: `2026-01-${String(number).padStart(2, '0')}`, state: 'OPEN',
     isDraft: false, autoMergeRequest: {}, mergeable: 'MERGEABLE',
     reviewDecision: 'APPROVED', author: { login: 'builder' }, labels: { nodes: [] },
+    reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } },
     ...overrides,
   };
 }
@@ -30,7 +31,10 @@ function setup(nodes) {
       return { repository: { pullRequests: { nodes, pageInfo: { hasNextPage: false } } } };
     },
     paginate: async (endpoint) => {
-      if (endpoint === 'rules') return [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'test' }] } }];
+      if (endpoint === 'rules') return [
+        { type: 'pull_request', parameters: { required_review_thread_resolution: true } },
+        { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'test' }] } },
+      ];
       if (endpoint === 'checks') return [{ name: 'test', status: 'completed', conclusion: 'success', started_at: '2026-01-01', app: { id: 1 } }];
       if (endpoint === 'statuses') return [{ context: 'codeowner-review', state: 'success' }];
       return [];
@@ -58,6 +62,7 @@ function setup(nodes) {
 }
 
 const active = { nodes: [{ name: 'auto-rebase-active' }] };
+const unresolved = { nodes: [{ isResolved: false, isOutdated: true }], pageInfo: { hasNextPage: false } };
 
 test('a pending incumbent holds its place ahead of ready PRs', async () => {
   for (const conclusion of ['success', null]) {
@@ -96,7 +101,7 @@ test('required results block selection and release a definitely failed incumbent
     await rebase(args);
     assert.deepEqual(args.calls, [], String(conclusion));
   }
-  for (const override of [{}, { isDraft: true }, { autoMergeRequest: null }, { labels: { nodes: [...active.nodes, { name: 'blocked:checks' }] } }, { reviewDecision: null, latestOpinionatedReviews: { nodes: [{ state: 'CHANGES_REQUESTED' }] } }]) {
+  for (const override of [{}, { isDraft: true }, { autoMergeRequest: null }, { labels: { nodes: [...active.nodes, { name: 'blocked:checks' }] } }, { reviewDecision: null, latestOpinionatedReviews: { nodes: [{ state: 'CHANGES_REQUESTED' }] } }, { reviewThreads: unresolved }]) {
     const args = setup([pr(1, { labels: active, ...override }), pr(2)]);
     const original = args.github.paginate;
     args.github.paginate = async (endpoint, options) => endpoint === 'checks' && options.ref === 'oid1' && !Object.keys(override).length
@@ -146,7 +151,19 @@ test('acquisition and revalidation protect branch updates and preserve the exact
   await assert.rejects(rebase(acquisition), /claim failed/);
   assert.deepEqual(acquisition.calls, []);
 
-  for (const override of [{ headRefOid: 'changed' }, { baseRefName: 'release' }, { isDraft: true }, { autoMergeRequest: null }, { reviewDecision: 'CHANGES_REQUESTED' }, { mergeable: 'UNKNOWN' }]) {
+  const incomplete = setup([pr(1, { reviewThreads: { nodes: [], pageInfo: { hasNextPage: true } } })]);
+  await assert.rejects(rebase(incomplete), /Incomplete PR metadata/);
+  assert.deepEqual(incomplete.calls, []);
+
+  const revalidation = setup([pr(1)]);
+  const revalidationQuery = revalidation.github.graphql;
+  revalidation.github.graphql = async (text, variables) => text.includes('pullRequest(number:')
+    ? { repository: { pullRequest: pr(1, { labels: active, reviewThreads: { nodes: [], pageInfo: { hasNextPage: true } } }) } }
+    : revalidationQuery(text, variables);
+  await assert.rejects(rebase(revalidation), /Cannot revalidate active PR/);
+  assert.deepEqual(revalidation.calls, [['claim', 1]]);
+
+  for (const override of [{ headRefOid: 'changed' }, { baseRefName: 'release' }, { isDraft: true }, { autoMergeRequest: null }, { reviewDecision: 'CHANGES_REQUESTED' }, { mergeable: 'UNKNOWN' }, { reviewThreads: unresolved }]) {
     const args = setup([pr(1), pr(2)]);
     const query = args.github.graphql;
     args.github.graphql = async (text, variables) => text.includes('pullRequest(number:')
@@ -188,4 +205,15 @@ test('only the oldest currently ready PR is claimed and updated', async () => {
   const args = setup([pr(2), pr(1), pr(3, { isDraft: true, labels: { nodes: [{ name: 'auto-rebase' }] } })]);
   await rebase(args);
   assert.deepEqual(args.calls, [['claim', 1], ['update', 'id1']]);
+
+  for (const required of [true, false]) {
+    const args = setup([pr(1, { reviewThreads: unresolved }), pr(2)]);
+    const paginate = args.github.paginate;
+    args.github.paginate = async (endpoint, options) => endpoint === 'rules'
+      ? [{ type: 'pull_request', parameters: { required_review_thread_resolution: required } }]
+      : paginate(endpoint, options);
+    await rebase(args);
+    const selected = required ? 2 : 1;
+    assert.deepEqual(args.calls, [['claim', selected], ['update', `id${selected}`]]);
+  }
 });
