@@ -374,9 +374,9 @@ test('a commented PR with no needed owner succeeds without asking anyone', async
   assert.deepEqual([f.calls, f.requests], [[['abc', 'codeowner-review', 'success']], []]);
 });
 
-test('a PR Copilot was never asked to review waits for a needed owner, asked only after a workflow run', async () => {
+test('a PR Copilot was never asked to review waits for and asks a needed owner', async () => {
   for (const [eventName, reviews, state, requested] of [
-    ['pull_request_target', [], 'pending', []],
+    ['pull_request_target', [], 'pending', ['owner']],
     ['workflow_run', [], 'pending', ['owner']],
     ['workflow_run', [['owner', 'APPROVED']], 'success', []],
   ]) {
