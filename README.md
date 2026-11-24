@@ -33,7 +33,7 @@ Shared GitHub Actions for the llm-prompts, cline-hooks and mcp-memory repositori
 - Selection uses current auto-merge, review, required conversation resolution and required-check results, not the retained `auto-rebase` label.
 - Pending checks keep the active PR selected. Closed PRs and definite blockers release the selection.
 - Only the selected PR updates its branch. Strict required-check freshness is unchanged.
-- Scheduled runs refresh `codeowner-review` waits answered by Copilot on the current head without requesting reviews.
+- Scheduled runs refresh `codeowner-review` waits that Copilot answered on any head. These runs ask the needed owners when the PR still needs an owner approval.
 - `sync-shared-files.yml` opens caller updates in llm-prompts, cline-hooks and mcp-memory. Merge those updates to enable disabled-auto-merge events and scheduled recovery.
 
 ## PR template
