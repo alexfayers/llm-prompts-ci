@@ -97,10 +97,8 @@ async function evaluate({ github, context, pr }) {
     if (!needed.length) {
       return ['success', 'No owner review needed', [], reviews];
     }
-    // A Copilot request can show up after pull_request_target events, so ask a never-asked PR's owners only after a workflow run.
-    const ask = verdict === 'commented' || context.eventName === 'workflow_run';
     const count = Math.max(1, minReviews(pr.labels ?? []));
-    return [...ownerVerdict(reviews, needed, author, count > 1 ? `Needs ${count} owner approvals` : 'Needs an owner approval', count), ask ? needed : [], reviews, true];
+    return [...ownerVerdict(reviews, needed, author, count > 1 ? `Needs ${count} owner approvals` : 'Needs an owner approval', count), needed, reviews, true];
   }
   const rules = await readCodeOwners(github, context.repo, pr.base.ref);
   const needsReview = (path) => (ownersOf(rules, path) ?? [repoOwner]).some((handle) => handle !== author);
