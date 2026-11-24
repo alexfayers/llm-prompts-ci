@@ -2,6 +2,8 @@ name: PR template
 
 on:
   workflow_call:
+  pull_request_target:
+    types: [opened, reopened, edited, ready_for_review, synchronize]
 
 concurrency:
   group: pr-template-${{ github.event.pull_request.number }}

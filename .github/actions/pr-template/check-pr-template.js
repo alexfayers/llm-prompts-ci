@@ -153,7 +153,7 @@ async function checkYappy({ github, context, body }) {
 
 async function check({ github, context, core }) {
   const pr = context.payload.pull_request;
-  const body = pr && (await github.rest.pulls.get({ ...context.repo, pull_number: pr.number })).data.body;
+  const body = pr && ((await github.rest.pulls.get({ ...context.repo, pull_number: pr.number })).data.body ?? '');
   if (pr) {
     try {
       await checkYappy({ github, context, body });
@@ -161,7 +161,7 @@ async function check({ github, context, core }) {
       core.warning(`Yappy check skipped: ${error.message}`);
     }
   }
-  if (!pr || pr.user?.type === 'Bot' || !body || !body.trim()) {
+  if (!pr || pr.user?.type === 'Bot') {
     return;
   }
 
