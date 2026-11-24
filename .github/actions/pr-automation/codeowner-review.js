@@ -67,7 +67,7 @@ function latestReviewStates(reviews) {
 /** Copilot's verdict: 'approved' (approved, or its latest review left no comments or only low-severity findings), 'commented' or 'never'. */
 async function copilotVerdict({ github, context, pr, reviews }) {
   const latest = reviews.filter(isCopilotReview).at(-1);
-  if (latest?.commit_id !== pr.head.sha) return 'never';
+  if (!latest) return 'never';
   if (latest.state !== 'COMMENTED') return latest.state === 'APPROVED' ? 'approved' : 'commented';
   const comments = await github.paginate(github.rest.pulls.listCommentsForReview, { ...context.repo, pull_number: pr.number, review_id: latest.id, per_page: 100 });
   const body = latest.body ?? '';
@@ -161,7 +161,7 @@ async function gate({ github, context, core, delay }) {
   }
   let result;
   try {
-    const hold = isSafeBotPr(pr) ? [] : await copilotHold({ github, context, core, pr, delay, setPending: (description) => setStatus(github, context, pr, 'pending', description) });
+    const hold = isSafeBotPr(pr) ? [] : await copilotHold({ github, context, pr, delay, setPending: (description) => setStatus(github, context, pr, 'pending', description) });
     if (hold?.length) {
       await setStatus(github, context, pr, ...hold);
     }
@@ -182,10 +182,12 @@ async function gate({ github, context, core, delay }) {
 
 async function syncPendingLabel({ github, context, core, pr, state, description }) {
   const { data: current } = await github.rest.pulls.get({ ...context.repo, pull_number: pr.number });
-  if (current.head.sha === pr.head.sha) {
-    const names = current.labels.map(({ name }) => name);
-    await syncLabel({ github, core, target: { ...context.repo, issue_number: pr.number }, names, label: PENDING_APPROVAL_LABEL, active: state === 'pending' && description !== CHANGES_REQUESTED });
+  if (current.head.sha !== pr.head.sha) {
+    return false;
   }
+  const names = current.labels.map(({ name }) => name);
+  await syncLabel({ github, core, target: { ...context.repo, issue_number: pr.number }, names, label: PENDING_APPROVAL_LABEL, active: state === 'pending' && description !== CHANGES_REQUESTED });
+  return true;
 }
 
 async function setReviewStatus({ github, context, pr }) {
@@ -205,8 +207,10 @@ async function recover({ github, context, core }) {
       const { data: { statuses } } = await github.rest.repos.getCombinedStatusForRef({ ...context.repo, ref: pr.head.sha });
       const status = statuses.find(({ context }) => context === STATUS_CONTEXT);
       if (await copilotWaitAnswered({ github, context, pr, status })) {
-        const [state, description] = await setReviewStatus({ github, context, pr });
-        await syncPendingLabel({ github, context, core, pr, state, description });
+        const [state, description, owners, reviews] = await setReviewStatus({ github, context, pr });
+        if ((await syncPendingLabel({ github, context, core, pr, state, description })) && state === 'pending') {
+          await requestOwners({ github, context, pr, owners, reviews });
+        }
       }
     } catch (error) {
       core.warning(`Failed to refresh ${STATUS_CONTEXT} on #${pr.number}: ${error.message}`);
