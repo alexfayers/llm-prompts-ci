@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { parseTemplateSections, findBodyIssues, check } = require('./check-pr-template.js');
 
 const TEMPLATE = `## Summary
@@ -188,6 +190,23 @@ test('check passes a bot PR whose body ignores the template', async () => {
   const calls = await runCheck({ files: [], body: 'Update dependency', user: { type: 'Bot' } });
 
   assert.deepEqual(calls, []);
+});
+
+test('check fails a human PR with a blank body', async () => {
+  for (const body of [null, '', ' \n']) {
+    const failures = [];
+    const calls = await runCheck({ files: [], body, core: { setFailed: (message) => failures.push(message) } });
+
+    assert.equal(failures.length, 1, JSON.stringify(body));
+    assert.match(failures[0], /Missing section: "## What"/);
+    assert.deepEqual(calls.map(([name]) => name), ['createComment']);
+  }
+});
+
+test('the workflow checks own PRs and caller PRs with the trusted job', () => {
+  const workflow = fs.readFileSync(path.join(__dirname, '../../workflows/pr-template.yml'), 'utf8');
+  assert.match(workflow, /^on:\n  workflow_call:\n  pull_request_target:\n    types: \[opened, reopened, edited, ready_for_review, synchronize\]\n/m);
+  assert.match(workflow, /      - uses: actions\/checkout@v7\n      - uses: alexfayers\/llm-prompts-ci\/\.github\/actions\/pr-template@main\n/);
 });
 
 test('check validates the live PR body, not the event payload body', async () => {

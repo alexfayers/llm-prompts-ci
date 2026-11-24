@@ -36,6 +36,12 @@ Shared GitHub Actions for the llm-prompts, cline-hooks and mcp-memory repositori
 - Scheduled runs refresh `codeowner-review` waits answered by Copilot on the current head without requesting reviews.
 - `sync-shared-files.yml` opens caller updates in llm-prompts, cline-hooks and mcp-memory. Merge those updates to enable disabled-auto-merge events and scheduled recovery.
 
+## PR template
+
+- `pr-template.yml` runs on this repo's PRs with `pull_request_target`. Callers run it with `workflow_call`.
+- The check fails when the PR body is missing or has an empty `## What` or `## Why` section, or keeps a `<!--` placeholder comment.
+- Bot PRs are exempt.
+
 ## Tests
 
 ```sh
