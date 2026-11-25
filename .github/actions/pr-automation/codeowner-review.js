@@ -1,6 +1,6 @@
 const { findPullRequest, CODEOWNER_REVIEW_CONTEXT: STATUS_CONTEXT } = require('./sync-project-status.js');
 const { copilotHold, isCopilotReview, copilotWaitAnswered } = require('./copilot-review.js');
-const { syncLabel, PENDING_APPROVAL_LABEL } = require('./label-pr.js');
+const { syncLabel, removeLabel, ensureLabel, PENDING_APPROVAL_LABEL, OWNER_REVIEWED_LABEL } = require('./label-pr.js');
 
 const SAFE_BOT_BRANCHES = {
   'renovate[bot]': ['renovate/all-minor-patch', 'renovate/github-actions', 'renovate/lock-file-maintenance', 'renovate/pi-extensions'],
@@ -9,6 +9,8 @@ const SAFE_BOT_BRANCHES = {
 const IGNORED_REVIEW_STATES = ['COMMENTED', 'PENDING'];
 const WRITE_PERMISSIONS = ['admin', 'write'];
 const CHANGES_REQUESTED = 'Code owner requested changes';
+const OWNER_REVIEWED = 'Reviewed locally by the owner';
+const BRANCH_MOVES = ['push', 'force_push', 'branch_creation'];
 
 async function setStatus(github, context, pr, state, description) {
   await github.rest.repos.createCommitStatus({
@@ -79,6 +81,38 @@ async function copilotVerdict({ github, context, pr, reviews }) {
 
 const isSafeBotPr = (pr) => Object.hasOwn(SAFE_BOT_BRANCHES, pr.user.login) && SAFE_BOT_BRANCHES[pr.user.login].includes(pr.head.ref);
 
+async function syncOwnerReview({ github, context, core }) {
+  const { action, pull_request: pr } = context.payload;
+  if (action !== 'synchronize') return;
+  const { data: current } = await github.rest.pulls.get({ ...context.repo, pull_number: pr.number });
+  if (current.head.sha !== pr.head.sha || !current.labels.some(({ name }) => name === OWNER_REVIEWED_LABEL.name)) return;
+  const labelled = (await ownerLabelEvents(github, context, current)).findLast(({ event }) => event === 'labeled');
+  const pushedAt = await headPushedAt(github, current);
+  if (labelled && pushedAt !== undefined && Date.parse(labelled.created_at) < pushedAt) {
+    await removeLabel(github, core, { ...context.repo, issue_number: pr.number }, OWNER_REVIEWED_LABEL.name);
+  }
+}
+
+async function headPushedAt(github, pr) {
+  if (!pr.head.repo) return undefined;
+  const activities = await github.paginate(github.rest.repos.listActivities, { owner: pr.head.repo.owner.login, repo: pr.head.repo.name, ref: pr.head.ref, per_page: 100 });
+  const latest = activities.filter(({ after }) => after === pr.head.sha).reduce((found, activity) => (!found || Date.parse(activity.timestamp) > Date.parse(found.timestamp) ? activity : found), undefined);
+  return BRANCH_MOVES.includes(latest?.activity_type) ? Date.parse(latest.timestamp) : undefined;
+}
+
+async function ownerLabelEvents(github, context, pr) {
+  const events = await github.paginate(github.rest.issues.listEvents, { ...context.repo, issue_number: pr.number, per_page: 100 });
+  return events.filter(({ event, label }) => ['labeled', 'unlabeled'].includes(event) && label.name === OWNER_REVIEWED_LABEL.name);
+}
+
+async function ownerReviewed({ github, context, pr }) {
+  if (!(pr.labels ?? []).some(({ name }) => name === OWNER_REVIEWED_LABEL.name)) return false;
+  const last = (await ownerLabelEvents(github, context, pr)).at(-1);
+  if (last?.event !== 'labeled' || last.actor?.login.toLowerCase() !== context.repo.owner.toLowerCase()) return false;
+  const pushedAt = await headPushedAt(github, pr);
+  return pushedAt !== undefined && Date.parse(last.created_at) > pushedAt;
+}
+
 /** Returns [state, description, owners to ask, reviews, min-reviews applied]: the owners only when the gate or min-reviews should request them. */
 async function evaluate({ github, context, pr }) {
   const { owner, repo } = context.repo;
@@ -87,39 +121,42 @@ async function evaluate({ github, context, pr }) {
   }
   const author = pr.user.login.toLowerCase();
   const repoOwner = owner.toLowerCase();
+  const reviewed = await ownerReviewed({ github, context, pr });
+  const waived = new Set([author, ...(reviewed ? [repoOwner] : [])]);
   const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number: pr.number, per_page: 100 });
   const reviews = await github.paginate(github.rest.pulls.listReviews, { owner, repo, pull_number: pr.number, per_page: 100 });
   const verdict = await copilotVerdict({ github, context, pr, reviews });
   const paths = files.flatMap(({ filename, previous_filename }) => [filename, previous_filename].filter(Boolean));
   if (['commented', 'never'].includes(verdict) && paths.length) {
     const extraRules = parseCodeOwners(process.env.REVIEW_OWNERS ?? '', repoOwner);
-    const needed = [...new Set([repoOwner, ...paths.flatMap((path) => ownersOf(extraRules, path) ?? [])])].filter((login) => login !== author);
+    const needed = [...new Set([repoOwner, ...paths.flatMap((path) => ownersOf(extraRules, path) ?? [])])].filter((login) => !waived.has(login));
     if (!needed.length) {
-      return ['success', 'No owner review needed', [], reviews];
+      return ['success', reviewed ? OWNER_REVIEWED : 'No owner review needed', [], reviews];
     }
     const count = Math.max(1, minReviews(pr.labels ?? []));
-    return [...ownerVerdict(reviews, needed, author, count > 1 ? `Needs ${count} owner approvals` : 'Needs an owner approval', count), needed, reviews, true];
+    return [...ownerVerdict(reviews, [repoOwner, ...needed], author, count > 1 ? `Needs ${count} owner approvals` : 'Needs an owner approval', count, needed), needed, reviews, true];
   }
   const rules = await readCodeOwners(github, context.repo, pr.base.ref);
-  const needsReview = (path) => (ownersOf(rules, path) ?? [repoOwner]).some((handle) => handle !== author);
+  const needsReview = (path) => (ownersOf(rules, path) ?? [repoOwner]).some((handle) => !waived.has(handle));
   if (!files.some(({ filename, previous_filename }) => [filename, previous_filename].some((path) => path && needsReview(path)))) {
-    return ['success', 'No code owner review needed', []];
+    return ['success', reviewed ? OWNER_REVIEWED : 'No code owner review needed', []];
   }
-  const owners = [repoOwner].filter((login) => login !== author);
-  const result = ownerVerdict(reviews, new Set([repoOwner, ...rules.flatMap((rule) => rule.owners)]), author, 'Needs a code owner approval');
+  const owners = (reviewed ? [...new Set(paths.flatMap((path) => ownersOf(rules, path) ?? [repoOwner]))] : [repoOwner]).filter((login) => !waived.has(login));
+  const result = ownerVerdict(reviews, new Set([repoOwner, ...rules.flatMap((rule) => rule.owners)]), author, 'Needs a code owner approval', 1, reviewed ? owners : undefined);
   if (result[0] === 'pending' && result[1] !== CHANGES_REQUESTED && verdict === 'approved' && (await isCollaborator({ github, context, pr }))) {
     return ['success', 'Approved by Copilot on a collaborator PR', owners, reviews];
   }
   return [...result, owners, reviews];
 }
 
-function ownerVerdict(reviews, owners, author, waiting, count = 1) {
+function ownerVerdict(reviews, owners, author, waiting, count = 1, required = owners) {
   const allowed = new Set(owners);
   const states = [...latestReviewStates(reviews)].filter(([login]) => allowed.has(login) && login !== author);
   if (states.some(([, state]) => state === 'CHANGES_REQUESTED')) {
     return ['pending', CHANGES_REQUESTED];
   }
-  return states.filter(([, state]) => state === 'APPROVED').length >= count ? ['success', 'Approved by a code owner'] : ['pending', waiting];
+  const approved = states.filter(([, state]) => state === 'APPROVED').map(([login]) => login);
+  return approved.length >= count && approved.some((login) => [...required].includes(login)) ? ['success', 'Approved by a code owner'] : ['pending', waiting];
 }
 
 async function isCollaborator({ github, context, pr }) {
@@ -161,6 +198,7 @@ async function gate({ github, context, core, delay }) {
   }
   let result;
   try {
+    await syncOwnerReview({ github, context, core });
     const hold = isSafeBotPr(pr) ? [] : await copilotHold({ github, context, pr, delay, setPending: (description) => setStatus(github, context, pr, 'pending', description) });
     if (hold?.length) {
       await setStatus(github, context, pr, ...hold);
@@ -186,7 +224,11 @@ async function syncPendingLabel({ github, context, core, pr, state, description 
     return false;
   }
   const names = current.labels.map(({ name }) => name);
-  await syncLabel({ github, core, target: { ...context.repo, issue_number: pr.number }, names, label: PENDING_APPROVAL_LABEL, active: state === 'pending' && description !== CHANGES_REQUESTED });
+  const active = state === 'pending' && description !== CHANGES_REQUESTED;
+  if (active && !names.includes(PENDING_APPROVAL_LABEL.name)) {
+    await ensureLabel(github, core, context.repo, OWNER_REVIEWED_LABEL);
+  }
+  await syncLabel({ github, core, target: { ...context.repo, issue_number: pr.number }, names, label: PENDING_APPROVAL_LABEL, active });
   return true;
 }
 
