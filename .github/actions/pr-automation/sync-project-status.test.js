@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { findPullRequest, isBlocked, isReleasePr, resolveStatus, setStatus } = require('./sync-project-status.js');
+const { findPullRequest, isBlocked, isReleasePr, resolveStatus, setStatus, sync } = require('./sync-project-status.js');
 
 const openPr = { state: 'OPEN', isDraft: false, reviewDecision: null };
 const reviewedAs = (...states) => ({ latestOpinionatedReviews: { nodes: states.map((state) => ({ state })) } });
@@ -100,4 +100,26 @@ test('release-please PRs are recognised by their branch', () => {
   assert.equal(isReleasePr({ payload: { pull_request: { head: { ref: 'release-please--branches--main' } } } }), true);
   assert.equal(isReleasePr({ payload: { workflow_run: { head_branch: 'release-please--branches--main' } } }), true);
   assert.equal(isReleasePr({ payload: { pull_request: { head: { ref: 'alexfayers/fix' } } } }), false);
+});
+
+test('a scheduled run sets each open PR status from its state and skips release PRs and correct ones', async () => {
+  const item = (optionId) => ({ projectItems: { nodes: [{ id: 'item', project: { id: PROJECT_ID }, fieldValueByName: { optionId } }] } });
+  const nodes = [
+    { id: 'P1', ...openPr, headRefName: 'fix', headRefOid: 's1', ...item('47fc9ee4') },
+    { id: 'P2', ...openPr, headRefName: 'ok', headRefOid: 's2', ...item('432b1b61') },
+    { id: 'P3', ...openPr, headRefName: 'release-please--branches--main', headRefOid: 's3', ...item('47fc9ee4') },
+  ];
+  const updates = [];
+  const github = {
+    graphql: async (query, variables) => {
+      if (/updateProjectV2ItemFieldValue/.test(query)) {
+        updates.push(variables.optionId);
+        return {};
+      }
+      return { repository: { pullRequests: { nodes, pageInfo: { hasNextPage: false } } } };
+    },
+    rest: { repos: { getCombinedStatusForRef: async () => ({ data: { statuses: [] } }) } },
+  };
+  await sync({ github, context: { eventName: 'schedule', repo: { owner: 'o', repo: 'r' }, payload: {} }, core: { info() {} } });
+  assert.deepEqual(updates, ['432b1b61']);
 });
