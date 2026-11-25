@@ -10,15 +10,15 @@ const CODEOWNERS = '*.md @Owner\n/src/*/prompts/**/rules/ @Owner @friend\n/src/*
 
 const COPILOT_NO_COMMENTS = ['copilot-pull-request-reviewer[bot]', 'COMMENTED', true];
 
-function fixture({ author, files, reviews = [], labels = [], branch = 'feature', requested = [], draft = false, permission = 'none', codeowners = CODEOWNERS, events = [], suites = [], createdAt = '2020-01-01T00:00:00Z', copilotComments = [], eventName = 'pull_request_target', copilotApproved = true, labelEvents = [] }) {
+function fixture({ author, files, reviews = [], labels = [], branch = 'feature', requested = [], draft = false, permission = 'none', codeowners = CODEOWNERS, events = [], suites = [], createdAt = '2020-01-01T00:00:00Z', copilotComments = [], eventName = 'pull_request_target', copilotApproved = true, labelEvents = [], activities = [] }) {
   reviews = [...(copilotApproved ? [COPILOT_NO_COMMENTS] : []), ...reviews];
   const calls = [];
   const labelCalls = [];
   const requests = [];
   const warnings = [];
-  const live = { number: 7, node_id: 'n7', user: { login: author }, labels: labels.map((name) => ({ name })), draft, created_at: createdAt, requested_reviewers: requested.map((login) => ({ login })), requested_teams: [], head: { sha: 'abc', ref: branch }, base: { ref: 'main' } };
+  const live = { number: 7, node_id: 'n7', user: { login: author }, labels: labels.map((name) => ({ name })), draft, created_at: createdAt, requested_reviewers: requested.map((login) => ({ login })), requested_teams: [], head: { sha: 'abc', ref: branch, repo: { name: 'r', owner: { login: 'owner' } } }, base: { ref: 'main' } };
   const github = {
-    paginate: async (method) => method.items,
+    paginate: async (method, params) => (typeof method.items === 'function' ? method.items(params) : method.items),
     rest: {
       pulls: { listFiles: { items: files.map((file) => (typeof file === 'string' ? { filename: file } : file)) }, listReviews: { items: reviews.map(([login, state, copilot, commit_id = 'abc', body = ''], id) => ({ id, user: { login }, state, is_copilot_code_review: copilot, commit_id, body })) }, listCommentsForReview: { items: copilotComments }, requestReviewers: async ({ pull_number, reviewers }) => requests.push([pull_number, reviewers]), get: async () => ({ data: structuredClone(live) }) },
       checks: { listSuitesForRef: { items: suites.map((created_at) => ({ created_at })) } },
@@ -29,12 +29,13 @@ function fixture({ author, files, reviews = [], labels = [], branch = 'feature',
         },
         createCommitStatus: async ({ sha, context, state }) => calls.push([sha, context, state]),
         getCollaboratorPermissionLevel: async () => ({ data: { permission } }),
+        listActivities: { items: ({ owner, repo, ref, activity_type }) => (owner === 'owner' && repo === 'r' && ref === branch && !activity_type ? activities.map(([after, timestamp, type = 'push']) => ({ after, timestamp, activity_type: type })) : []) },
       },
       issues: {
         createLabel: async ({ name }) => labelCalls.push(['createLabel', name]),
         addLabels: async ({ labels }) => labelCalls.push(['addLabels', labels]),
         removeLabel: async ({ name }) => labelCalls.push(['removeLabel', name]),
-        listEvents: { items: labelEvents.map(([name, login]) => ({ event: 'labeled', label: { name }, actor: { login } })) },
+        listEvents: { items: labelEvents.map(([name, login, created_at, event = 'labeled']) => ({ event, label: { name }, actor: { login }, created_at })) },
         listEventsForTimeline: { items: events.map(([event, login, created_at]) => ({ event, [event === 'reviewed' ? 'user' : 'requested_reviewer']: { login }, created_at })) } },
     },
   };
@@ -85,7 +86,7 @@ test('scheduled recovery labels an owner approval wait and asks the needed owner
   const f = scheduled({ author: 'stranger', files: [OWNED_FILE], copilotComments: [{ id: 1 }] });
   await recover(f);
   assert.deepEqual(f.calls, [['abc', 'codeowner-review', 'pending', 'Needs an owner approval']]);
-  assert.deepEqual(f.labelCalls, [['createLabel', 'pending:approval'], ['addLabels', ['pending:approval']]]);
+  assert.deepEqual(f.labelCalls, [['createLabel', 'owner-reviewed'], ['createLabel', 'pending:approval'], ['addLabels', ['pending:approval']]]);
   assert.deepEqual(f.requests, [[7, ['owner', 'alice', 'bob']]]);
 });
 
@@ -148,7 +149,7 @@ test('the pending approval label follows an approval wait', async () => {
   const bot = [['pending:approval', 'github-actions[bot]']];
   const pending = ['pending:approval'];
   for (const [name, options, expected, change = () => {}] of [
-    ['approval wait', { reviews: [['owner', 'APPROVED']] }, [['createLabel', 'pending:approval'], ['addLabels', pending]]],
+    ['approval wait', { reviews: [['owner', 'APPROVED']] }, [['createLabel', 'owner-reviewed'], ['createLabel', 'pending:approval'], ['addLabels', pending]]],
     ['approved', { reviews: [['Friend', 'APPROVED']], labels: pending, labelEvents: bot }, [['removeLabel', 'pending:approval']]],
     ['approved with a label a person added', { reviews: [['Friend', 'APPROVED']], labels: pending, labelEvents: [['pending:approval', 'someone']] }, []],
     ['owner changes requested', { reviews: [['Friend', 'CHANGES_REQUESTED']], labels: pending, labelEvents: bot }, [['removeLabel', 'pending:approval']]],
@@ -517,6 +518,59 @@ test('a Copilot-approved collaborator PR waiting on min-reviews asks the repo ow
   const f = fixture({ author: 'alice', files: ['README.md'], labels: ['min-reviews:2'], permission: 'write' });
   await gate(f);
   assert.deepEqual([f.calls, f.requests], [[['abc', 'codeowner-review', 'pending']], [[7, ['owner']]]]);
+});
+
+const [BEFORE, PUSHED, AFTER, LATER] = ['2020-01-01T00:00:00Z', '2020-01-02T00:00:00Z', '2020-01-03T00:00:00Z', '2020-01-04T00:00:00Z'];
+const ownerLabel = (labelEvents, options = {}) => fixture({ author: 'stranger', files: ['README.md'], labels: ['owner-reviewed'], activities: [['abc', PUSHED]], labelEvents, ...options });
+
+test('an owner-reviewed label the repo owner applied after the latest push waives his approval', async () => {
+  for (const type of ['push', 'force_push', 'branch_creation']) {
+    const f = ownerLabel([['owner-reviewed', 'Owner', AFTER]], { activities: [['abc', BEFORE, 'pr_merge'], ['abc', PUSHED, type]] });
+    await gate(f);
+    assert.deepEqual([f.calls, f.requests], [[['abc', 'codeowner-review', 'success']], []], type);
+  }
+});
+
+test('an owner-reviewed label needs the repo owner to add it after the latest push of the head', async () => {
+  for (const [name, labelEvents, activities] of [
+    ['a push after the label', [['owner-reviewed', 'owner', BEFORE]]],
+    ['a non-owner relabel after the owner', [['owner-reviewed', 'owner', AFTER], ['owner-reviewed', 'owner', AFTER, 'unlabeled'], ['owner-reviewed', 'friend', LATER]]],
+    ['a removed label', [['owner-reviewed', 'owner', AFTER], ['owner-reviewed', 'owner', LATER, 'unlabeled']]],
+    ['no push activity for the head', [['owner-reviewed', 'owner', AFTER]], [['old', PUSHED]]],
+    ['another activity type last set the head', [['owner-reviewed', 'owner', AFTER]], [['abc', BEFORE], ['abc', PUSHED, 'pr_merge']]],
+  ]) {
+    const f = ownerLabel(labelEvents, activities && { activities });
+    await gate(f);
+    assert.deepEqual([f.calls, f.requests], [[['abc', 'codeowner-review', 'pending']], [[7, ['owner']]]], name);
+  }
+});
+
+test('a push removes an owner-reviewed label added before it, unless the head moved again', async () => {
+  for (const [name, sha, removed, labelled = BEFORE] of [['current head', 'abc', [['removeLabel', 'owner-reviewed']]], ['moved again', 'def', []], ['labelled after the push', 'abc', [], AFTER]]) {
+    const f = ownerLabel([['owner-reviewed', 'owner', labelled]]);
+    f.context.payload.action = 'synchronize';
+    f.live.head.sha = sha;
+    await gate(f);
+    assert.deepEqual(f.labelCalls.filter(([call]) => call === 'removeLabel'), removed, name);
+  }
+});
+
+test('an owner-reviewed label still needs the other required owners', async () => {
+  for (const [name, options, state, requested] of [
+    ['review owner', { files: [OWNED_FILE], ...COPILOT_COMMENTED }, 'pending', ['alice', 'bob']],
+    ['review owner approved', { files: [OWNED_FILE], ...COPILOT_COMMENTED, reviews: [...COPILOT_COMMENTED.reviews, ['bob', 'APPROVED']] }, 'success', []],
+    ['review owner requested changes', { files: [OWNED_FILE], ...COPILOT_COMMENTED, reviews: [...COPILOT_COMMENTED.reviews, ['bob', 'APPROVED'], ['alice', 'CHANGES_REQUESTED']] }, 'pending', []],
+    ['min-reviews', { files: [OWNED_FILE], ...COPILOT_COMMENTED, reviews: [...COPILOT_COMMENTED.reviews, ['bob', 'APPROVED']], labels: ['owner-reviewed', 'min-reviews:2'] }, 'pending', ['alice']],
+    ['min-reviews with a real owner approval', { files: [OWNED_FILE], ...COPILOT_COMMENTED, reviews: [...COPILOT_COMMENTED.reviews, ['bob', 'APPROVED'], ['owner', 'APPROVED']], labels: ['owner-reviewed', 'min-reviews:2'] }, 'success', []],
+    ['review owner with only a real owner approval', { files: [OWNED_FILE], ...COPILOT_COMMENTED, reviews: [...COPILOT_COMMENTED.reviews, ['owner', 'APPROVED']] }, 'pending', ['alice', 'bob']],
+    ['code owner', { files: [PROMPT_FILE] }, 'pending', ['friend']],
+    ['code owner with only a real owner approval', { files: [PROMPT_FILE], reviews: [['owner', 'APPROVED']] }, 'pending', ['friend']],
+    ['code owner approved', { files: [PROMPT_FILE], reviews: [['friend', 'APPROVED']] }, 'success', []],
+  ]) {
+    const f = ownerLabel([['owner-reviewed', 'owner', AFTER]], options);
+    await gate(f);
+    assert.deepEqual([f.calls, f.requests], [[['abc', 'codeowner-review', state]], requested.length ? [[7, requested]] : []], name);
+  }
 });
 
 const COPILOT = 'copilot-pull-request-reviewer[bot]';

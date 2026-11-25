@@ -18,7 +18,11 @@ Shared GitHub Actions for the llm-prompts, cline-hooks and mcp-memory repositori
   - `blocked:checks`: a required check failed.
   - `blocked:changes-requested`: the review decision is changes requested, or a reviewer with push access requested changes in their latest review. Only the latest 50 reviews are read.
 - `pending:approval` marks a PR waiting for a required approval. It does not block CI.
-- Automation removes a label only when the last `labeled` event for it came from automation. A label a person added stays. GitHub records no event when someone re-adds a label that is already there.
+- `owner-reviewed` replaces the repo owner's approval in `codeowner-review`. Other required owners, other `codeowner-review` waits and min-reviews still apply.
+  - The label counts only when the repo owner added it last, after the latest push, force push or branch creation that set the head commit.
+  - A push removes a label added before it.
+  - Automation creates the label when a PR first waits for an approval.
+- Except for `owner-reviewed` on a push, automation removes a label only when the last `labeled` event for it came from automation. A label a person added stays. GitHub records no event when someone re-adds a label that is already there.
 - Review submissions and dismissals re-run labelling only in repos with a `pr-review.yml` relay.
 
 ## Releases

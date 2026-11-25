@@ -5,6 +5,7 @@ const BLOCKED_LABEL = { name: 'blocked', color: 'd73a4a', description: 'Open dep
 const blockedLabel = (reason, description) => ({ name: `${REASON_PREFIX}${reason}`, color: BLOCKED_LABEL.color, description });
 const CHANGES_REQUESTED_LABEL = blockedLabel('changes-requested', 'A reviewer requested changes');
 const PENDING_APPROVAL_LABEL = { name: 'pending:approval', color: 'fbca04', description: 'Waiting for a required approval' };
+const OWNER_REVIEWED_LABEL = { name: 'owner-reviewed', color: '0e8a16', description: 'The repo owner reviewed the current head locally' };
 const AUTO_REBASE_LABEL = { name: 'auto-rebase', color: '0e8a16', description: 'Rebased automatically when the base branch moves' };
 
 const BOT_LOGIN = 'github-actions[bot]';
@@ -98,4 +99,4 @@ async function labelAutoRebase({ github, context, core }) {
   core.setOutput('labelled', 'true');
 }
 
-module.exports = { isRenovate, hasBreakingChange, label, labelBlocked, labelAutoRebase, ensureLabel, addLabels, removeLabel, labelledByBot, blockedLabel, syncLabel, BLOCKED_LABEL, PENDING_APPROVAL_LABEL, AUTO_REBASE_LABEL };
+module.exports = { isRenovate, hasBreakingChange, label, labelBlocked, labelAutoRebase, ensureLabel, addLabels, removeLabel, labelledByBot, blockedLabel, syncLabel, BLOCKED_LABEL, PENDING_APPROVAL_LABEL, OWNER_REVIEWED_LABEL, AUTO_REBASE_LABEL };
