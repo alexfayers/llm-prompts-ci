@@ -293,7 +293,8 @@ async function recover({ github, context, core }) {
     try {
       const { data: { statuses } } = await github.rest.repos.getCombinedStatusForRef({ ...context.repo, ref: pr.head.sha });
       const status = statuses.find(({ context }) => context === STATUS_CONTEXT);
-      if (await copilotWaitAnswered({ github, context, pr, status })) {
+      const labelled = pr.labels.some(({ name }) => name === OWNER_REVIEWED_LABEL.name);
+      if ((labelled && status?.state !== 'success') || (await copilotWaitAnswered({ github, context, pr, status }))) {
         const [state, description, owners, reviews] = await setReviewStatus({ github, context, pr });
         if ((await syncPendingLabel({ github, context, core, pr, state, description })) && state === 'pending') {
           await requestOwners({ github, context, pr, owners, reviews });
