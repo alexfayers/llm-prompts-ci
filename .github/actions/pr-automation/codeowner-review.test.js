@@ -15,12 +15,13 @@ function fixture({ author, files, reviews = [], labels = [], branch = 'feature',
   const calls = [];
   const labelCalls = [];
   const requests = [];
+  const removals = [];
   const warnings = [];
   const live = { number: 7, node_id: 'n7', user: { login: author }, labels: labels.map((name) => ({ name })), draft, created_at: createdAt, requested_reviewers: requested.map((login) => ({ login })), requested_teams: [], head: { sha: 'abc', ref: branch, repo: { name: 'r', owner: { login: 'owner' } } }, base: { ref: 'main' } };
   const github = {
     paginate: async (method, params) => (typeof method.items === 'function' ? method.items(params) : method.items),
     rest: {
-      pulls: { listFiles: { items: files.map((file) => (typeof file === 'string' ? { filename: file } : file)) }, listReviews: { items: reviews.map(([login, state, copilot, commit_id = 'abc', body = ''], id) => ({ id, user: { login }, state, is_copilot_code_review: copilot, commit_id, body })) }, listCommentsForReview: { items: copilotComments }, requestReviewers: async ({ pull_number, reviewers }) => requests.push([pull_number, reviewers]), get: async () => ({ data: structuredClone(live) }) },
+      pulls: { listFiles: { items: files.map((file) => (typeof file === 'string' ? { filename: file } : file)) }, listReviews: { items: reviews.map(([login, state, copilot, commit_id = 'abc', body = ''], id) => ({ id, user: { login }, state, is_copilot_code_review: copilot, commit_id, body })) }, listCommentsForReview: { items: copilotComments }, requestReviewers: async ({ pull_number, reviewers }) => requests.push([pull_number, reviewers]), removeRequestedReviewers: async ({ pull_number, reviewers }) => removals.push([pull_number, reviewers]), get: async () => ({ data: structuredClone(live) }) },
       checks: { listSuitesForRef: { items: suites.map((created_at) => ({ created_at })) } },
       repos: {
         getContent: async ({ path, ref }) => {
@@ -40,7 +41,7 @@ function fixture({ author, files, reviews = [], labels = [], branch = 'feature',
     },
   };
   const context = { eventName, repo: { owner: 'owner', repo: 'r' }, payload: { pull_request: structuredClone(live) } };
-  return { github, context, core: { warning: (message) => warnings.push(message) }, calls, labelCalls, requests, warnings, live };
+  return { github, context, core: { warning: (message) => warnings.push(message) }, calls, labelCalls, requests, removals, warnings, live };
 }
 
 function scheduled(options = {}) {
@@ -567,6 +568,19 @@ test('an owner-reviewed label passes the review of every required owner', async 
     const f = ownerLabel([['owner-reviewed', 'owner', AFTER]], options);
     await gate(f);
     assert.deepEqual([f.calls, f.requests], [[['abc', 'codeowner-review', state]], []], name);
+  }
+});
+
+test('an owner-reviewed label drops the pending requests of the owners the gate asks', async () => {
+  for (const [name, options, removed] of [
+    ['review owners', { files: [OWNED_FILE], ...COPILOT_COMMENTED, requested: ['owner', 'Alice', 'bob', 'carol'] }, [[7, ['owner', 'Alice', 'bob']]]],
+    ['code owners', { files: [PROMPT_FILE], requested: ['friend', 'carol'] }, [[7, ['friend']]]],
+    ['only an unrelated reviewer', { files: [OWNED_FILE], ...COPILOT_COMMENTED, requested: ['carol'] }, []],
+    ['nobody requested', { files: [OWNED_FILE], ...COPILOT_COMMENTED }, []],
+  ]) {
+    const f = ownerLabel([['owner-reviewed', 'owner', AFTER]], options);
+    await gate(f);
+    assert.deepEqual(f.removals, removed, name);
   }
 });
 

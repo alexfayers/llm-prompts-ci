@@ -30,7 +30,7 @@ async function hasReviewRequirements(github, repo, sha) {
 
 function isApproved(pr, requirementsMet) {
   const states = (pr.latestOpinionatedReviews?.nodes ?? []).map(({ state }) => state);
-  return requirementsMet && states.includes('APPROVED') && !states.includes('CHANGES_REQUESTED');
+  return requirementsMet && !states.includes('CHANGES_REQUESTED');
 }
 
 function resolveStatus(pr, requirementsMet) {

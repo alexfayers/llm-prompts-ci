@@ -122,6 +122,7 @@ async function evaluate({ github, context, pr }) {
   const author = pr.user.login.toLowerCase();
   const repoOwner = owner.toLowerCase();
   if (await ownerReviewed({ github, context, pr })) {
+    await unrequestOwners({ github, context, pr });
     return ['success', OWNER_REVIEWED, []];
   }
   const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number: pr.number, per_page: 100 });
@@ -189,6 +190,22 @@ async function requestOwners({ github, context, pr, owners, reviews }) {
   const reviewers = owners.filter((login) => !done.has(login));
   if (reviewers.length) {
     await github.rest.pulls.requestReviewers({ ...context.repo, pull_number: pr.number, reviewers });
+  }
+}
+
+async function unrequestOwners({ github, context, pr }) {
+  const requested = (pr.requested_reviewers ?? []).map(({ login }) => login);
+  if (!requested.length) {
+    return;
+  }
+  const repoOwner = context.repo.owner.toLowerCase();
+  const files = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number, per_page: 100 });
+  const paths = files.flatMap(({ filename, previous_filename }) => [filename, previous_filename].filter(Boolean));
+  const ruleSets = [parseCodeOwners(process.env.REVIEW_OWNERS ?? '', repoOwner), await readCodeOwners(github, context.repo, pr.base.ref)];
+  const owners = new Set([repoOwner, ...paths.flatMap((path) => ruleSets.flatMap((rules) => ownersOf(rules, path) ?? []))]);
+  const reviewers = requested.filter((login) => owners.has(login.toLowerCase()));
+  if (reviewers.length) {
+    await github.rest.pulls.removeRequestedReviewers({ ...context.repo, pull_number: pr.number, reviewers });
   }
 }
 

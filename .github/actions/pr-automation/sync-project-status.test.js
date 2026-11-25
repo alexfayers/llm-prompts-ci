@@ -17,9 +17,11 @@ test('approved PR maps to Approved unless changes are also requested', () => {
   assert.equal(resolveStatus({ ...openPr, ...reviewedAs('APPROVED', 'CHANGES_REQUESTED') }, true), '432b1b61');
 });
 
-test('approved PR stays in Review until the review requirements are met', () => {
+test('PR maps to Approved once codeowner-review passes, with or without an approving review', () => {
   assert.equal(resolveStatus({ ...openPr, ...reviewedAs('APPROVED') }, false), '432b1b61');
   assert.equal(resolveStatus({ ...openPr, ...reviewedAs('APPROVED') }, true), 'c6f50cd1');
+  assert.equal(resolveStatus(openPr, true), 'c6f50cd1');
+  assert.equal(resolveStatus({ ...openPr, ...reviewedAs('CHANGES_REQUESTED') }, true), '432b1b61');
 });
 
 test('blocked PRs keep their draft, review or approved status', () => {
