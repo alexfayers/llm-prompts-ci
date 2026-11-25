@@ -155,7 +155,8 @@ runs:
         inputs.project == 'true' &&
         inputs.projects-token != '' &&
         !github.event.repository.private &&
-        ((github.event_name == 'pull_request_target' &&
+        (github.event_name == 'schedule' ||
+        (github.event_name == 'pull_request_target' &&
           (contains(fromJSON('["opened", "reopened", "synchronize", "closed", "ready_for_review", "converted_to_draft"]'), github.event.action) ||
           (contains(fromJSON('["labeled", "unlabeled"]'), github.event.action) && startsWith(github.event.label.name, 'min-reviews:')))) ||
         steps.wait-copilot.outputs.reviewed == 'true' ||

@@ -9,6 +9,7 @@ const STATUS_OPTION = {
 };
 
 const REVIEWS = 'latestOpinionatedReviews(first: 50) { nodes { state authorCanPushToRepository } }';
+const RELEASE_BRANCH_PREFIX = 'release-please--branches--';
 const CODEOWNER_REVIEW_CONTEXT = 'codeowner-review';
 
 function isBlocked(pr) {
@@ -45,11 +46,13 @@ function resolveStatus(pr, requirementsMet) {
 
 const PROJECT_ITEM_FIELDS = 'projectItems(first: 20) { nodes { id project { id } fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { optionId } } } }';
 
+const PR_FIELDS = `id number state isDraft reviewDecision ${REVIEWS} headRefOid labels(first: 50) { nodes { name } }`;
+
 async function fetchPr(github, { owner, repo, number }, extraFields = '') {
   const { repository } = await github.graphql(
     `query($owner: String!, $repo: String!, $number: Int!) {
       repository(owner: $owner, name: $repo) {
-        pullRequest(number: $number) { id number state isDraft reviewDecision ${REVIEWS} headRefOid labels(first: 50) { nodes { name } } ${extraFields} }
+        pullRequest(number: $number) { ${PR_FIELDS} ${extraFields} }
       }
     }`,
     { owner, repo, number }
@@ -113,10 +116,48 @@ async function findPr(github, context, core, extraFields = '') {
 }
 
 function isReleasePr({ payload }) {
-  return (payload.pull_request?.head.ref ?? payload.workflow_run?.head_branch)?.startsWith('release-please--branches--') ?? false;
+  return (payload.pull_request?.head.ref ?? payload.workflow_run?.head_branch)?.startsWith(RELEASE_BRANCH_PREFIX) ?? false;
+}
+
+async function syncPr(github, repo, pr) {
+  await setStatus(github, pr, resolveStatus(pr, await hasReviewRequirements(github, repo, pr.headRefOid)));
+}
+
+async function listOpenPrs(github, { owner, repo }) {
+  const prs = [];
+  let after = null;
+  do {
+    const { repository: { pullRequests } } = await github.graphql(
+      `query($owner: String!, $repo: String!, $after: String) {
+        repository(owner: $owner, name: $repo) {
+          pullRequests(states: OPEN, first: 50, after: $after) { nodes { ${PR_FIELDS} headRefName ${PROJECT_ITEM_FIELDS} } pageInfo { hasNextPage endCursor } }
+        }
+      }`,
+      { owner, repo, after }
+    );
+    prs.push(...pullRequests.nodes);
+    after = pullRequests.pageInfo.hasNextPage ? pullRequests.pageInfo.endCursor : null;
+  } while (after);
+  return prs;
+}
+
+async function syncOpenPrs({ github, context, core }) {
+  for (const pr of await listOpenPrs(github, context.repo)) {
+    if (pr.headRefName.startsWith(RELEASE_BRANCH_PREFIX)) {
+      continue;
+    }
+    try {
+      await syncPr(github, context.repo, pr);
+    } catch (error) {
+      core.warning(`Failed to sync project status on #${pr.number}: ${error.message}`);
+    }
+  }
 }
 
 async function sync({ github, context, core }) {
+  if (context.eventName === 'schedule') {
+    return syncOpenPrs({ github, context, core });
+  }
   if (isReleasePr(context)) {
     core.info('Release PR: skipping.');
     return;
@@ -125,7 +166,7 @@ async function sync({ github, context, core }) {
   if (!pr) {
     return;
   }
-  await setStatus(github, pr, resolveStatus(pr, await hasReviewRequirements(github, context.repo, pr.headRefOid)));
+  await syncPr(github, context.repo, pr);
 }
 
 module.exports = { findPullRequest, findPr, isReleasePr, fetchPr, isBlocked, REVIEWS, CODEOWNER_REVIEW_CONTEXT, writerReviews, changesRequested, hasReviewRequirements, resolveStatus, setStatus, sync };
