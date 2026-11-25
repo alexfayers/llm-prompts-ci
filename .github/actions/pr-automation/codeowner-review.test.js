@@ -566,7 +566,8 @@ test('a push after an owner-reviewed label keeps it only while the PR diff stays
   for (const [name, type, files, removed, state] of [
     ['a bot rebase with an identical diff', 'force_push', readme('@@ -4,2 +4,3 @@ intro\n a\n+b'), [], 'success'],
     ['a push that changes a patch', 'push', readme('@@ -1,2 +1,4 @@ intro\n a\n+b\n+c'), [['removeLabel', 'owner-reviewed']], 'pending'],
-    ['a rebase that resolves a conflict', 'force_push', readme('@@ -4,2 +4,3 @@ intro\n A\n+b'), [['removeLabel', 'owner-reviewed']], 'pending'],
+    ['a rebase after main edited a context line', 'force_push', readme('@@ -4,2 +4,3 @@ other\n A\n+b'), [], 'success'],
+    ['a rebase that changes an added line', 'force_push', readme('@@ -4,2 +4,3 @@ intro\n a\n+B'), [['removeLabel', 'owner-reviewed']], 'pending'],
   ]) {
     const f = ownerLabel([['owner-reviewed', 'owner', PUSHED]], { activities: [['old', BEFORE], ['abc', AFTER, type, 'old']], diffs: { old: readme('@@ -1,2 +1,3 @@ intro\n a\n+b'), abc: files } });
     f.context.payload.action = 'synchronize';

@@ -19,7 +19,7 @@ Shared GitHub Actions for the llm-prompts, cline-hooks and mcp-memory repositori
   - `blocked:changes-requested`: the review decision is changes requested, or a reviewer with push access requested changes in their latest review. Only the latest 50 reviews are read.
 - `pending:approval` marks a PR waiting for a required approval. It does not block CI.
 - `owner-reviewed` passes the owner review in `codeowner-review` for every required owner. Other `codeowner-review` waits and min-reviews still apply.
-  - The label counts only when the repo owner added it last, and every push, force push or branch creation since then left the PR diff unchanged. The diff compares each file path, status and patch, without hunk line numbers.
+  - The label counts only when the repo owner added it last, and every push, force push or branch creation since then left the PR diff unchanged. The diff compares each file path, status and the added and removed lines of its patch. Context lines and hunk line numbers do not count.
   - A push that changes the diff, or leaves it unreadable, removes the label. A rebase that keeps the diff keeps the label.
   - Once the label counts, `codeowner-review` removes the pending review requests of the owners it asks. Other requested reviewers stay.
   - Automation creates the label when a PR first waits for an approval.
