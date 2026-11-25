@@ -1,5 +1,5 @@
 name: PR automation
-description: Sync a public repo's PR status onto the llm-prompts ecosystem project board, enable squash auto-merge on ready contribute PRs, apply a breaking label from the PR title or body, label PRs with requested changes as blocked:changes-requested, label PRs with merge conflicts as blocked:conflicts and failing required checks as blocked:checks, apply path-based area labels, report a codeowner-review commit status that waits for a requested Copilot review, refresh answered waits on a schedule, pass the owner review in that status when the repo owner added the owner-reviewed label after the latest push, label PRs waiting for an approval as pending:approval and request the needed owners' review, and label PRs ready to auto-rebase.
+description: Sync a public repo's PR status onto the llm-prompts ecosystem project board, enable squash auto-merge on ready contribute PRs, apply a breaking label from the PR title or body, label PRs with requested changes as blocked:changes-requested, label PRs with merge conflicts as blocked:conflicts and failing required checks as blocked:checks, apply path-based area labels, report a codeowner-review commit status that waits for a requested Copilot review, refresh answered waits on a schedule, pass the owner review in that status when the repo owner added the owner-reviewed label after the latest push, label PRs waiting for an approval as pending:approval and request the needed owners' review, label PRs ready to auto-rebase, and remove the blocked:checks, blocked:conflicts, blocked:changes-requested, pending:approval and auto-rebase-active labels when a PR closes.
 inputs:
   automation-token:
     description: Token for enabling auto-merge and for removing blocked labels. Unlike github.token, it makes these changes start new workflow runs. In a private repo, scope the token to that repo only.
@@ -124,6 +124,19 @@ runs:
         script: |
           const { labelConflicts } = require(`${process.env.ACTION_PATH}/label-conflicts.js`)
           await labelConflicts({ github, removeClient: getOctokit(process.env.AUTOMATION_TOKEN), context, core })
+
+    - name: Clear state labels on a closed PR
+      if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
+      uses: actions/github-script@v9
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        AUTOMATION_TOKEN: ${{ inputs.automation-token }}
+      with:
+        retries: 3
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const { clearStateLabels } = require(`${process.env.ACTION_PATH}/label-conflicts.js`)
+          await clearStateLabels({ github, removeClient: getOctokit(process.env.AUTOMATION_TOKEN), context, core })
 
     - name: Hold auto-merge on a Copilot review without approval
       if: steps.wait-copilot.outputs.reviewed == 'true' || (github.event_name == 'workflow_run' && contains(fromJSON('["PR review", "Copilot"]'), github.event.workflow_run.name))

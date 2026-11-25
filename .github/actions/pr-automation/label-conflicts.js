@@ -1,5 +1,6 @@
-const { BLOCKED_LABEL, removeLabel, labelledByBot, blockedLabel, syncLabel } = require('./label-pr.js');
+const { BLOCKED_LABEL, CHANGES_REQUESTED_LABEL, PENDING_APPROVAL_LABEL, removeLabel, labelledByBot, blockedLabel, syncLabel } = require('./label-pr.js');
 const { REVIEWS, writerReviews, changesRequested } = require('./sync-project-status.js');
+const { ACTIVE_LABEL } = require('./rebase-prs.js');
 
 const CONFLICTS_LABEL = blockedLabel('conflicts', 'Merge conflicts with the base branch');
 const CHECKS_LABEL = blockedLabel('checks', 'A required check failed');
@@ -68,4 +69,12 @@ async function labelConflicts({ github, removeClient = github, context, core, de
   }
 }
 
-module.exports = { labelConflicts, DEPENDENCIES_CONTEXT, dependenciesPending, fetchPr, requiredCheckFailed, clearsBlock };
+async function clearStateLabels({ removeClient, context, core }) {
+  const { number, labels } = context.payload.pull_request;
+  const state = [CHECKS_LABEL, CONFLICTS_LABEL, CHANGES_REQUESTED_LABEL, PENDING_APPROVAL_LABEL, ACTIVE_LABEL].map(({ name }) => name);
+  for (const { name } of labels.filter(({ name }) => state.includes(name))) {
+    await removeLabel(removeClient, core, { ...context.repo, issue_number: number }, name);
+  }
+}
+
+module.exports = { labelConflicts, clearStateLabels, DEPENDENCIES_CONTEXT, dependenciesPending, fetchPr, requiredCheckFailed, clearsBlock };
