@@ -114,7 +114,7 @@ async function diffKept(github, context, pr, moves) {
   return true;
 }
 
-/** The PR diff from the merge-base of the base branch and `sha`, keyed by file and patch without hunk line numbers, or undefined when unreadable. */
+/** The PR diff from the merge-base of the base branch and `sha`, keyed by file and the patch's added and removed lines with bare hunk markers, or undefined when unreadable. */
 async function prDiff(github, context, pr, sha) {
   let files;
   try {
@@ -124,7 +124,7 @@ async function prDiff(github, context, pr, sha) {
     throw error;
   }
   if (files.length >= COMPARE_FILE_LIMIT) return undefined;
-  return JSON.stringify(files.map(({ filename, previous_filename, status, patch, sha: blob }) => [filename, previous_filename, status, patch?.replace(/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/gm, '@@') ?? blob]).sort());
+  return JSON.stringify(files.map(({ filename, previous_filename, status, patch, sha: blob }) => [filename, previous_filename, status, patch?.split('\n').filter((line) => /^[-+@]/.test(line)).map((line) => (line.startsWith('@@') ? '@@' : line)).join('\n') ?? blob]).sort());
 }
 
 async function ownerLabelEvents(github, context, pr) {
