@@ -23,7 +23,8 @@ Shared GitHub Actions for the llm-prompts, cline-hooks and mcp-memory repositori
   - A push that changes the diff, or leaves it unreadable, removes the label. A rebase that keeps the diff keeps the label.
   - Once the label counts, `codeowner-review` removes the pending review requests of the owners it asks. Other requested reviewers stay.
   - Automation creates the label when a PR first waits for an approval.
-- Except for `owner-reviewed` on a push, automation removes a label only when the last `labeled` event for it came from automation. A label a person added stays. GitHub records no event when someone re-adds a label that is already there.
+- When a PR closes, merged or not, automation removes `blocked:checks`, `blocked:conflicts`, `blocked:changes-requested`, `pending:approval` and `auto-rebase-active`.
+- Except for `owner-reviewed` on a push and state labels on a closed PR, automation removes a label only when the last `labeled` event for it came from automation. A label a person added stays. GitHub records no event when someone re-adds a label that is already there.
 - Review submissions and dismissals re-run labelling only in repos with a `pr-review.yml` relay.
 
 ## Releases

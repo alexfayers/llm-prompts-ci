@@ -137,4 +137,4 @@ async function rebase({ github, context, core }) {
   }
 }
 
-module.exports = { rebase };
+module.exports = { rebase, ACTIVE_LABEL };

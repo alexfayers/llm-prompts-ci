@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { labelConflicts } = require('./label-conflicts.js');
+const { labelConflicts, clearStateLabels } = require('./label-conflicts.js');
 
 async function run({ mergeable, labels = [], reviewDecision = null, reviews = [], actor = 'github-actions[bot]', open = [], rules = [], runs = [], statuses = [], payload = { pull_request: { number: 7, head: { sha: 'abc' }, base: { ref: 'main' } } } }) {
   const changes = [];
@@ -82,4 +82,14 @@ test('a finished CI run checks only the PR with that head commit', async () => {
   const open = [3, 7].map((number) => ({ number, head: { sha: `sha${number}` }, base: { ref: 'main' } }));
   const options = { mergeable: 'MERGEABLE', rules: required, runs: [{ name: 'test', conclusion: 'failure' }], open, payload: { workflow_run: { head_sha: 'sha7' } } };
   assert.deepEqual(await run(options), added);
+});
+
+test('a closed PR loses every bot-managed state label it has', async () => {
+  const changes = [];
+  const github = { rest: { issues: { removeLabel: () => assert.fail('removal must use the token client') } } };
+  const removeClient = { rest: { issues: { removeLabel: async (args) => changes.push([args.issue_number, args.name]) } } };
+  const names = ['blocked:checks', 'blocked:conflicts', 'blocked:changes-requested', 'pending:approval', 'auto-rebase-active', 'area:ci', 'breaking', 'owner-reviewed', 'blocked'];
+  const context = { repo: { owner: 'o', repo: 'r' }, payload: { pull_request: { number: 7, labels: names.map((name) => ({ name })) } } };
+  await clearStateLabels({ github, removeClient, context, core: { warning() {} } });
+  assert.deepEqual(changes, names.slice(0, 5).map((name) => [7, name]));
 });

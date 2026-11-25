@@ -99,4 +99,4 @@ async function labelAutoRebase({ github, context, core }) {
   core.setOutput('labelled', 'true');
 }
 
-module.exports = { isRenovate, hasBreakingChange, label, labelBlocked, labelAutoRebase, ensureLabel, addLabels, removeLabel, labelledByBot, blockedLabel, syncLabel, BLOCKED_LABEL, PENDING_APPROVAL_LABEL, OWNER_REVIEWED_LABEL, AUTO_REBASE_LABEL };
+module.exports = { isRenovate, hasBreakingChange, label, labelBlocked, labelAutoRebase, ensureLabel, addLabels, removeLabel, labelledByBot, blockedLabel, syncLabel, BLOCKED_LABEL, CHANGES_REQUESTED_LABEL, PENDING_APPROVAL_LABEL, OWNER_REVIEWED_LABEL, AUTO_REBASE_LABEL };
