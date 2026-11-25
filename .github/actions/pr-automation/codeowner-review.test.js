@@ -555,21 +555,26 @@ test('a push removes an owner-reviewed label added before it, unless the head mo
   }
 });
 
-test('an owner-reviewed label still needs the other required owners', async () => {
-  for (const [name, options, state, requested] of [
-    ['review owner', { files: [OWNED_FILE], ...COPILOT_COMMENTED }, 'pending', ['alice', 'bob']],
-    ['review owner approved', { files: [OWNED_FILE], ...COPILOT_COMMENTED, reviews: [...COPILOT_COMMENTED.reviews, ['bob', 'APPROVED']] }, 'success', []],
-    ['review owner requested changes', { files: [OWNED_FILE], ...COPILOT_COMMENTED, reviews: [...COPILOT_COMMENTED.reviews, ['bob', 'APPROVED'], ['alice', 'CHANGES_REQUESTED']] }, 'pending', []],
-    ['min-reviews', { files: [OWNED_FILE], ...COPILOT_COMMENTED, reviews: [...COPILOT_COMMENTED.reviews, ['bob', 'APPROVED']], labels: ['owner-reviewed', 'min-reviews:2'] }, 'pending', ['alice']],
-    ['min-reviews with a real owner approval', { files: [OWNED_FILE], ...COPILOT_COMMENTED, reviews: [...COPILOT_COMMENTED.reviews, ['bob', 'APPROVED'], ['owner', 'APPROVED']], labels: ['owner-reviewed', 'min-reviews:2'] }, 'success', []],
-    ['review owner with only a real owner approval', { files: [OWNED_FILE], ...COPILOT_COMMENTED, reviews: [...COPILOT_COMMENTED.reviews, ['owner', 'APPROVED']] }, 'pending', ['alice', 'bob']],
-    ['code owner', { files: [PROMPT_FILE] }, 'pending', ['friend']],
-    ['code owner with only a real owner approval', { files: [PROMPT_FILE], reviews: [['owner', 'APPROVED']] }, 'pending', ['friend']],
-    ['code owner approved', { files: [PROMPT_FILE], reviews: [['friend', 'APPROVED']] }, 'success', []],
+test('an owner-reviewed label passes the review of every required owner', async () => {
+  for (const [name, options, state] of [
+    ['review owner', { files: [OWNED_FILE], ...COPILOT_COMMENTED }, 'success'],
+    ['review owner on an owner PR', { author: 'owner', files: [OWNED_FILE], ...COPILOT_COMMENTED }, 'success'],
+    ['review owner requested changes', { files: [OWNED_FILE], ...COPILOT_COMMENTED, reviews: [...COPILOT_COMMENTED.reviews, ['alice', 'CHANGES_REQUESTED']] }, 'success'],
+    ['code owner', { files: [PROMPT_FILE] }, 'success'],
+    ['code owner on an owner PR', { author: 'owner', files: [PROMPT_FILE] }, 'success'],
+    ['min-reviews', { files: [OWNED_FILE], ...COPILOT_COMMENTED, reviews: [...COPILOT_COMMENTED.reviews, ['bob', 'APPROVED']], labels: ['owner-reviewed', 'min-reviews:2'] }, 'pending'],
   ]) {
     const f = ownerLabel([['owner-reviewed', 'owner', AFTER]], options);
     await gate(f);
-    assert.deepEqual([f.calls, f.requests], [[['abc', 'codeowner-review', state]], requested.length ? [[7, requested]] : []], name);
+    assert.deepEqual([f.calls, f.requests], [[['abc', 'codeowner-review', state]], []], name);
+  }
+});
+
+test('a stale or non-owner owner-reviewed label on an owner PR still needs the review owners', async () => {
+  for (const [name, labelEvents] of [['stale', [['owner-reviewed', 'owner', BEFORE]]], ['non-owner', [['owner-reviewed', 'friend', AFTER]]]]) {
+    const f = ownerLabel(labelEvents, { author: 'owner', files: [OWNED_FILE], ...COPILOT_COMMENTED });
+    await gate(f);
+    assert.deepEqual([f.calls, f.requests], [[['abc', 'codeowner-review', 'pending']], [[7, ['alice', 'bob']]]], name);
   }
 });
 

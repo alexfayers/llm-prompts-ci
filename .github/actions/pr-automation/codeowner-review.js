@@ -121,28 +121,29 @@ async function evaluate({ github, context, pr }) {
   }
   const author = pr.user.login.toLowerCase();
   const repoOwner = owner.toLowerCase();
-  const reviewed = await ownerReviewed({ github, context, pr });
-  const waived = new Set([author, ...(reviewed ? [repoOwner] : [])]);
+  if (await ownerReviewed({ github, context, pr })) {
+    return ['success', OWNER_REVIEWED, []];
+  }
   const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number: pr.number, per_page: 100 });
   const reviews = await github.paginate(github.rest.pulls.listReviews, { owner, repo, pull_number: pr.number, per_page: 100 });
   const verdict = await copilotVerdict({ github, context, pr, reviews });
   const paths = files.flatMap(({ filename, previous_filename }) => [filename, previous_filename].filter(Boolean));
   if (['commented', 'never'].includes(verdict) && paths.length) {
     const extraRules = parseCodeOwners(process.env.REVIEW_OWNERS ?? '', repoOwner);
-    const needed = [...new Set([repoOwner, ...paths.flatMap((path) => ownersOf(extraRules, path) ?? [])])].filter((login) => !waived.has(login));
+    const needed = [...new Set([repoOwner, ...paths.flatMap((path) => ownersOf(extraRules, path) ?? [])])].filter((login) => login !== author);
     if (!needed.length) {
-      return ['success', reviewed ? OWNER_REVIEWED : 'No owner review needed', [], reviews];
+      return ['success', 'No owner review needed', [], reviews];
     }
     const count = Math.max(1, minReviews(pr.labels ?? []));
     return [...ownerVerdict(reviews, [repoOwner, ...needed], author, count > 1 ? `Needs ${count} owner approvals` : 'Needs an owner approval', count, needed), needed, reviews, true];
   }
   const rules = await readCodeOwners(github, context.repo, pr.base.ref);
-  const needsReview = (path) => (ownersOf(rules, path) ?? [repoOwner]).some((handle) => !waived.has(handle));
+  const needsReview = (path) => (ownersOf(rules, path) ?? [repoOwner]).some((handle) => handle !== author);
   if (!files.some(({ filename, previous_filename }) => [filename, previous_filename].some((path) => path && needsReview(path)))) {
-    return ['success', reviewed ? OWNER_REVIEWED : 'No code owner review needed', []];
+    return ['success', 'No code owner review needed', []];
   }
-  const owners = (reviewed ? [...new Set(paths.flatMap((path) => ownersOf(rules, path) ?? [repoOwner]))] : [repoOwner]).filter((login) => !waived.has(login));
-  const result = ownerVerdict(reviews, new Set([repoOwner, ...rules.flatMap((rule) => rule.owners)]), author, 'Needs a code owner approval', 1, reviewed ? owners : undefined);
+  const owners = [repoOwner].filter((login) => login !== author);
+  const result = ownerVerdict(reviews, new Set([repoOwner, ...rules.flatMap((rule) => rule.owners)]), author, 'Needs a code owner approval');
   if (result[0] === 'pending' && result[1] !== CHANGES_REQUESTED && verdict === 'approved' && (await isCollaborator({ github, context, pr }))) {
     return ['success', 'Approved by Copilot on a collaborator PR', owners, reviews];
   }
