@@ -612,6 +612,18 @@ test('a stale or non-owner owner-reviewed label on an owner PR still needs the r
   }
 });
 
+test('scheduled recovery rechecks an owner-reviewed PR whose status is not yet success', async () => {
+  for (const [name, state, calls, removals] of [
+    ['pending', 'pending', [['abc', 'codeowner-review', 'success', 'Reviewed locally by the owner']], [[7, ['owner', 'alice', 'bob']]]],
+    ['success', 'success', [], []],
+  ]) {
+    const f = scheduled({ author: 'stranger', files: [OWNED_FILE], ...COPILOT_COMMENTED, labels: ['owner-reviewed'], activities: [['abc', PUSHED]], labelEvents: [['owner-reviewed', 'owner', AFTER]], requested: ['owner', 'alice', 'bob'] });
+    f.github.rest.repos.getCombinedStatusForRef = async () => ({ data: { statuses: [{ context: 'codeowner-review', state, description: 'Needs an owner approval' }] } });
+    await recover(f);
+    assert.deepEqual([f.calls, f.removals, f.requests], [calls, removals, []], name);
+  }
+});
+
 const COPILOT = 'copilot-pull-request-reviewer[bot]';
 const copilotHold = (options) => fixture({ author: 'owner', files: ['src/llm_prompts/cli.py'], copilotApproved: false, ...options });
 const expect = (state, options) => async () => {
