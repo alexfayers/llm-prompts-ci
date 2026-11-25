@@ -10,7 +10,7 @@ const CODEOWNERS = '*.md @Owner\n/src/*/prompts/**/rules/ @Owner @friend\n/src/*
 
 const COPILOT_NO_COMMENTS = ['copilot-pull-request-reviewer[bot]', 'COMMENTED', true];
 
-function fixture({ author, files, reviews = [], labels = [], branch = 'feature', requested = [], draft = false, permission = 'none', codeowners = CODEOWNERS, events = [], suites = [], createdAt = '2020-01-01T00:00:00Z', copilotComments = [], eventName = 'pull_request_target', copilotApproved = true, labelEvents = [], activities = [] }) {
+function fixture({ author, files, reviews = [], labels = [], branch = 'feature', requested = [], draft = false, permission = 'none', codeowners = CODEOWNERS, events = [], suites = [], createdAt = '2020-01-01T00:00:00Z', copilotComments = [], eventName = 'pull_request_target', copilotApproved = true, labelEvents = [], activities = [], diffs = {} }) {
   reviews = [...(copilotApproved ? [COPILOT_NO_COMMENTS] : []), ...reviews];
   const calls = [];
   const labelCalls = [];
@@ -19,7 +19,7 @@ function fixture({ author, files, reviews = [], labels = [], branch = 'feature',
   const warnings = [];
   const live = { number: 7, node_id: 'n7', user: { login: author }, labels: labels.map((name) => ({ name })), draft, created_at: createdAt, requested_reviewers: requested.map((login) => ({ login })), requested_teams: [], head: { sha: 'abc', ref: branch, repo: { name: 'r', owner: { login: 'owner' } } }, base: { ref: 'main' } };
   const github = {
-    paginate: async (method, params) => (typeof method.items === 'function' ? method.items(params) : method.items),
+    paginate: async (method, params, map) => (map ? map(await method(params)) : typeof method.items === 'function' ? method.items(params) : method.items),
     rest: {
       pulls: { listFiles: { items: files.map((file) => (typeof file === 'string' ? { filename: file } : file)) }, listReviews: { items: reviews.map(([login, state, copilot, commit_id = 'abc', body = ''], id) => ({ id, user: { login }, state, is_copilot_code_review: copilot, commit_id, body })) }, listCommentsForReview: { items: copilotComments }, requestReviewers: async ({ pull_number, reviewers }) => requests.push([pull_number, reviewers]), removeRequestedReviewers: async ({ pull_number, reviewers }) => removals.push([pull_number, reviewers]), get: async () => ({ data: structuredClone(live) }) },
       checks: { listSuitesForRef: { items: suites.map((created_at) => ({ created_at })) } },
@@ -30,7 +30,12 @@ function fixture({ author, files, reviews = [], labels = [], branch = 'feature',
         },
         createCommitStatus: async ({ sha, context, state }) => calls.push([sha, context, state]),
         getCollaboratorPermissionLevel: async () => ({ data: { permission } }),
-        listActivities: { items: ({ owner, repo, ref, activity_type }) => (owner === 'owner' && repo === 'r' && ref === branch && !activity_type ? activities.map(([after, timestamp, type = 'push']) => ({ after, timestamp, activity_type: type })) : []) },
+        listActivities: { items: ({ owner, repo, ref, activity_type }) => (owner === 'owner' && repo === 'r' && ref === branch && !activity_type ? activities.map(([after, timestamp, type = 'push', before]) => ({ before, after, timestamp, activity_type: type })) : []) },
+        compareCommitsWithBasehead: async ({ owner, repo, basehead }) => {
+          const [base, sha] = basehead.split('...');
+          if (owner !== 'owner' || repo !== 'r' || base !== 'main' || !diffs[sha]) throw Object.assign(new Error('Not Found'), { status: 404 });
+          return { data: { files: diffs[sha] } };
+        },
       },
       issues: {
         createLabel: async ({ name }) => labelCalls.push(['createLabel', name]),
@@ -553,6 +558,20 @@ test('a push removes an owner-reviewed label added before it, unless the head mo
     f.live.head.sha = sha;
     await gate(f);
     assert.deepEqual(f.labelCalls.filter(([call]) => call === 'removeLabel'), removed, name);
+  }
+});
+
+test('a push after an owner-reviewed label keeps it only while the PR diff stays the same', async () => {
+  const readme = (patch) => [{ filename: 'README.md', status: 'modified', patch }];
+  for (const [name, type, files, removed, state] of [
+    ['a bot rebase with an identical diff', 'force_push', readme('@@ -4,2 +4,3 @@ intro\n a\n+b'), [], 'success'],
+    ['a push that changes a patch', 'push', readme('@@ -1,2 +1,4 @@ intro\n a\n+b\n+c'), [['removeLabel', 'owner-reviewed']], 'pending'],
+    ['a rebase that resolves a conflict', 'force_push', readme('@@ -4,2 +4,3 @@ intro\n A\n+b'), [['removeLabel', 'owner-reviewed']], 'pending'],
+  ]) {
+    const f = ownerLabel([['owner-reviewed', 'owner', PUSHED]], { activities: [['old', BEFORE], ['abc', AFTER, type, 'old']], diffs: { old: readme('@@ -1,2 +1,3 @@ intro\n a\n+b'), abc: files } });
+    f.context.payload.action = 'synchronize';
+    await gate(f);
+    assert.deepEqual([f.labelCalls.filter(([call]) => call === 'removeLabel'), f.calls], [removed, [['abc', 'codeowner-review', state]]], name);
   }
 });
 

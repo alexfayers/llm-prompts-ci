@@ -11,6 +11,7 @@ const WRITE_PERMISSIONS = ['admin', 'write'];
 const CHANGES_REQUESTED = 'Code owner requested changes';
 const OWNER_REVIEWED = 'Reviewed locally by the owner';
 const BRANCH_MOVES = ['push', 'force_push', 'branch_creation'];
+const COMPARE_FILE_LIMIT = 300;
 
 async function setStatus(github, context, pr, state, description) {
   await github.rest.repos.createCommitStatus({
@@ -87,17 +88,43 @@ async function syncOwnerReview({ github, context, core }) {
   const { data: current } = await github.rest.pulls.get({ ...context.repo, pull_number: pr.number });
   if (current.head.sha !== pr.head.sha || !current.labels.some(({ name }) => name === OWNER_REVIEWED_LABEL.name)) return;
   const labelled = (await ownerLabelEvents(github, context, current)).findLast(({ event }) => event === 'labeled');
-  const pushedAt = await headPushedAt(github, current);
-  if (labelled && pushedAt !== undefined && Date.parse(labelled.created_at) < pushedAt) {
+  const moves = labelled && (await headMovesSince(github, current, labelled.created_at));
+  if (moves?.length && !(await diffKept(github, context, current, moves))) {
     await removeLabel(github, core, { ...context.repo, issue_number: pr.number }, OWNER_REVIEWED_LABEL.name);
   }
 }
 
-async function headPushedAt(github, pr) {
+/** The branch moves after `since`, oldest first, or undefined when no branch move set the current head. */
+async function headMovesSince(github, pr, since) {
   if (!pr.head.repo) return undefined;
-  const activities = await github.paginate(github.rest.repos.listActivities, { owner: pr.head.repo.owner.login, repo: pr.head.repo.name, ref: pr.head.ref, per_page: 100 });
-  const latest = activities.filter(({ after }) => after === pr.head.sha).reduce((found, activity) => (!found || Date.parse(activity.timestamp) > Date.parse(found.timestamp) ? activity : found), undefined);
-  return BRANCH_MOVES.includes(latest?.activity_type) ? Date.parse(latest.timestamp) : undefined;
+  const activities = (await github.paginate(github.rest.repos.listActivities, { owner: pr.head.repo.owner.login, repo: pr.head.repo.name, ref: pr.head.ref, per_page: 100 }))
+    .toSorted((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+  if (!BRANCH_MOVES.includes(activities.findLast(({ after }) => after === pr.head.sha)?.activity_type)) return undefined;
+  return activities.filter(({ activity_type, timestamp }) => BRANCH_MOVES.includes(activity_type) && Date.parse(timestamp) >= Date.parse(since));
+}
+
+/** Whether every move left the PR diff against the base branch unchanged. */
+async function diffKept(github, context, pr, moves) {
+  const diffs = new Map();
+  const diffAt = (sha) => diffs.get(sha) ?? diffs.set(sha, prDiff(github, context, pr, sha)).get(sha);
+  for (const { before, after } of moves) {
+    const [old, current] = await Promise.all([diffAt(before), diffAt(after)]);
+    if (old === undefined || old !== current) return false;
+  }
+  return true;
+}
+
+/** The PR diff from the merge-base of the base branch and `sha`, keyed by file and patch without hunk line numbers, or undefined when unreadable. */
+async function prDiff(github, context, pr, sha) {
+  let files;
+  try {
+    files = await github.paginate(github.rest.repos.compareCommitsWithBasehead, { ...context.repo, basehead: `${pr.base.ref}...${sha}`, per_page: 100 }, ({ data }) => data.files ?? []);
+  } catch (error) {
+    if (error.status) return undefined;
+    throw error;
+  }
+  if (files.length >= COMPARE_FILE_LIMIT) return undefined;
+  return JSON.stringify(files.map(({ filename, previous_filename, status, patch, sha: blob }) => [filename, previous_filename, status, patch?.replace(/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/gm, '@@') ?? blob]).sort());
 }
 
 async function ownerLabelEvents(github, context, pr) {
@@ -109,8 +136,8 @@ async function ownerReviewed({ github, context, pr }) {
   if (!(pr.labels ?? []).some(({ name }) => name === OWNER_REVIEWED_LABEL.name)) return false;
   const last = (await ownerLabelEvents(github, context, pr)).at(-1);
   if (last?.event !== 'labeled' || last.actor?.login.toLowerCase() !== context.repo.owner.toLowerCase()) return false;
-  const pushedAt = await headPushedAt(github, pr);
-  return pushedAt !== undefined && Date.parse(last.created_at) > pushedAt;
+  const moves = await headMovesSince(github, pr, last.created_at);
+  return moves !== undefined && (!moves.length || diffKept(github, context, pr, moves));
 }
 
 /** Returns [state, description, owners to ask, reviews, min-reviews applied]: the owners only when the gate or min-reviews should request them. */
