@@ -1,11 +1,12 @@
 const { BLOCKED_LABEL, ensureLabel, labelledByBot, blockedLabel } = require('../pr-automation/label-pr.js');
-const { findPullRequest } = require('../pr-automation/sync-project-status.js');
+const { findPullRequest, isReleasePr } = require('../pr-automation/sync-project-status.js');
 const { isBlockedLabel } = require('../blocked/blocked.js');
 const { DEPENDENCIES_CONTEXT, dependenciesPending, fetchPr, requiredCheckFailed, clearsBlock } = require('../pr-automation/label-conflicts.js');
 
 const DEPENDENCIES_LABEL = blockedLabel('dependencies', 'Open dependencies');
 const DISPATCH_EVENT = 'dependencies-recheck';
 const STATE_CHANGES = ['closed', 'reopened'];
+const NO_DEPENDENCIES = 'No open dependencies';
 const DEPENDENCY = /(?:depends on|blocked by)\s+(?:https:\/\/github\.com\/)?([\w.-]+\/[\w.-]+)?(?:#|\/(?:pull|issues)\/)(\d+)/gi;
 
 async function setStatus(github, context, pr, state, description) {
@@ -46,7 +47,7 @@ async function evaluate({ github, removeClient, context, core, delay }, listed) 
   }
 
   const target = { owner, repo, issue_number: pr.number };
-  await setStatus(github, context, pr, open.length > 0 ? 'pending' : 'success', open.length > 0 ? `Waiting on ${open.join(', ')}` : 'No open dependencies');
+  await setStatus(github, context, pr, open.length > 0 ? 'pending' : 'success', open.length > 0 ? `Waiting on ${open.join(', ')}` : NO_DEPENDENCIES);
   const names = pr.labels.map(({ name }) => name);
   if (open.length > 0) {
     if (!names.includes(DEPENDENCIES_LABEL.name)) {
@@ -122,6 +123,11 @@ async function dispatchCrossRepoDependents({ context, core, client }) {
 }
 
 async function check({ github, context, core, getOctokit, token, delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
+  const { pull_request: pull, action } = context.payload;
+  if (pull && !STATE_CHANGES.includes(action) && isReleasePr(context)) {
+    await setStatus(github, context, pull, 'success', NO_DEPENDENCIES);
+    return;
+  }
   let failure;
   const removeClient = token ? getOctokit(token) : github;
   for (const pr of await pullsToCheck({ github, context })) {
