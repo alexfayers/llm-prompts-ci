@@ -217,3 +217,22 @@ test('a PR review run rechecks only the PR matching its head sha, branch and rep
   await check({ github, context, core });
   assert.deepEqual(calls, []);
 });
+
+test('a release-please PR passes without checking links, labels or dependents', async () => {
+  const { github, context, core, calls, getOctokit, token } = fixture({ body: 'Depends on #1', labels: ['blocked:dependencies'], states: { 'o/r#1': 'open' } });
+  Object.assign(context.payload, { action: 'synchronize' });
+  context.payload.pull_request.head.ref = 'release-please--branches--main';
+  const client = { ...getOctokit(), paginate: async () => calls.push('search') };
+  await check({ github, context, core, getOctokit: () => client, token });
+  assert.deepEqual(calls, [['status', 'success']]);
+});
+
+test('a closed release-please PR still rechecks the PRs that depend on it', async () => {
+  const { github, context, core, calls } = fixture({ body: 'Release' });
+  Object.assign(context.payload, { action: 'closed' });
+  Object.assign(context.payload.pull_request, { number: 5, head: { sha: 'abc', ref: 'release-please--branches--main' } });
+  github.paginate = async () => [{ number: 6, head: { sha: 'sha6' }, body: 'Depends on #5', labels: [] }];
+  github.rest.repos.createCommitStatus = async ({ sha, state }) => calls.push(['status', sha, state]);
+  await check({ github, context, core });
+  assert.deepEqual(calls, [['status', 'abc', 'success'], ['status', 'sha6', 'success']]);
+});
