@@ -68,4 +68,12 @@ jobs:
             echo "No open release PR"
             exit 0
           fi
-          gh pr merge "$number" --repo "$REPO" --auto --squash
+          for attempt in 1 2 3; do
+            gh pr merge "$number" --repo "$REPO" --auto --squash && exit 0
+            if [ "$attempt" -lt 3 ]; then
+              echo "Merge attempt $attempt failed, retrying in 30s"
+              sleep 30
+            fi
+          done
+          echo "::error::Could not enable auto-merge on release PR #$number"
+          exit 1
