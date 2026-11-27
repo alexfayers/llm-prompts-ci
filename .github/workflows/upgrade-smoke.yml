@@ -55,10 +55,13 @@ jobs:
           done
 
       - id: latest
-        name: Find the latest llm-prompts release
+        name: Find the latest releases
         env:
           GH_TOKEN: ${{ github.token }}
-        run: echo "tag=$(gh release view -R alexfayers/llm-prompts --json tagName -q .tagName)" >> "$GITHUB_OUTPUT"
+        run: |
+          for tool in llm-prompts cline-hooks mcp-memory; do
+            echo "$tool=$(gh release view -R "alexfayers/$tool" --json tagName -q .tagName)" >> "$GITHUB_OUTPUT"
+          done
 
       - name: Use a temporary home
         run: |
@@ -90,12 +93,27 @@ jobs:
 
       - name: Install the latest releases
         env:
-          TAG: ${{ steps.latest.outputs.tag }}
+          TAG: ${{ steps.latest.outputs.llm-prompts }}
         run: |
           echo "llm-prompts $TAG"
           uvx --from "git+https://github.com/alexfayers/llm-prompts@$TAG" llm-prompts setup --init
           uvx --from "git+https://github.com/alexfayers/llm-prompts@$TAG" llm-prompts setup
           llm-prompts install claude-code
+
+      - name: Check the tools are at their latest releases
+        env:
+          LATEST: ${{ toJSON(steps.latest.outputs) }}
+        run: |
+          python="$(uv tool dir)/llm-prompts/bin/python"
+          for tool in llm-prompts cline-hooks mcp-memory; do
+            tag="$(jq -r --arg tool "$tool" '.[$tool]' <<< "$LATEST")"
+            version="$("$python" -c 'import sys; from importlib.metadata import version; print(version(sys.argv[1]))' "$tool")"
+            echo "$tool: installed $version, latest release $tag"
+            if [ "v$version" != "$tag" ]; then
+              echo "::error::$tool is installed at $version, not its latest release $tag"
+              exit 1
+            fi
+          done
 
       - name: Check the memory server is registered
         run: |
