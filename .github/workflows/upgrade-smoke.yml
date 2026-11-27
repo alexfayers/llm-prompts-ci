@@ -1,0 +1,153 @@
+name: Upgrade smoke
+
+on:
+  workflow_call:
+    inputs:
+      repo:
+        description: Tool under test, one of llm-prompts, cline-hooks or mcp-memory.
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: upgrade-smoke-${{ inputs.repo }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  upgrade-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Check the tool name
+        env:
+          REPO: ${{ inputs.repo }}
+        run: |
+          case "$REPO" in
+            llm-prompts | cline-hooks | mcp-memory) ;;
+            *) echo "::error::repo must be llm-prompts, cline-hooks or mcp-memory, not '$REPO'"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.HEAD_SHA }}
+      - uses: astral-sh/setup-uv@v10.4.0
+      - uses: alexfayers/llm-prompts-ci/.github/actions/setup-just@main
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - run: npm install -g @anthropic-ai/claude-code@2.1.332
+
+      - name: Check the justfile recipes
+        run: |
+          for recipe in upgrade-seed upgrade-smoke; do
+            if ! just --show "$recipe" > /dev/null 2>&1; then
+              echo "::error::The justfile has no '$recipe' recipe. Add it to run the upgrade smoke test."
+              exit 1
+            fi
+          done
+
+      - id: latest
+        name: Find the latest llm-prompts release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "tag=$(gh release view -R alexfayers/llm-prompts --json tagName -q .tagName)" >> "$GITHUB_OUTPUT"
+
+      - name: Use a temporary home
+        run: |
+          home="$RUNNER_TEMP/home"
+          mkdir -p "$home/.local/bin"
+          port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+          {
+            echo "HOME=$home"
+            echo "XDG_CONFIG_HOME=$home/.config"
+            echo "XDG_DATA_HOME=$home/.local/share"
+            echo "XDG_STATE_HOME=$home/.local/state"
+            echo "XDG_CACHE_HOME=$home/.cache"
+            echo "XDG_BIN_HOME=$home/.local/bin"
+            echo "LLM_PROMPTS_HOME=$home/.local/share/llm-prompts"
+            echo "MCP_MEMORY_PORT=$port"
+          } >> "$GITHUB_ENV"
+          echo "$home/.local/bin" >> "$GITHUB_PATH"
+
+      # shortcut: shims block mcp-memory setup-service, replace with MCP_MEMORY_NO_SERVICE=1 once mcp-memory#260 is in the latest release
+      - name: Block system service commands
+        run: |
+          shims="$RUNNER_TEMP/no-services"
+          mkdir -p "$shims"
+          for command in sudo systemctl launchctl; do
+            printf '#!/bin/sh\necho "upgrade-smoke: %s is blocked so the job leaves system services alone" >&2\nexit 1\n' "$command" > "$shims/$command"
+            chmod +x "$shims/$command"
+          done
+          echo "$shims" >> "$GITHUB_PATH"
+
+      - name: Install the latest releases
+        env:
+          TAG: ${{ steps.latest.outputs.tag }}
+        run: |
+          echo "llm-prompts $TAG"
+          uvx --from "git+https://github.com/alexfayers/llm-prompts@$TAG" llm-prompts setup --init
+          uvx --from "git+https://github.com/alexfayers/llm-prompts@$TAG" llm-prompts setup
+          llm-prompts install claude-code
+
+      - name: Check the memory server is registered
+        run: |
+          jq -e --arg url "http://localhost:$MCP_MEMORY_PORT/mcp" \
+            '.mcpServers.memory.url == $url' "$HOME/.claude.json"
+
+      - name: Start the memory server
+        run: |
+          cat > "$RUNNER_TEMP/start-memory.sh" <<'SH'
+          pidfile="$RUNNER_TEMP/mcp-memory.pid"
+          if [ -f "$pidfile" ]; then
+            pid="$(cat "$pidfile")"
+            kill "$pid"
+            while kill -0 "$pid" 2> /dev/null; do sleep 1; done
+          fi
+          nohup mcp-memory >> "$RUNNER_TEMP/mcp-memory.log" 2>&1 < /dev/null &
+          echo "$!" > "$pidfile"
+          if ! curl -s -o /dev/null --retry 30 --retry-delay 1 --retry-connrefused \
+            -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$MCP_MEMORY_PORT/mcp"; then
+            cat "$RUNNER_TEMP/mcp-memory.log"
+            exit 1
+          fi
+          SH
+          sh "$RUNNER_TEMP/start-memory.sh"
+
+      - run: just upgrade-seed
+
+      - name: Point the tool at the PR head
+        env:
+          REPO: ${{ inputs.repo }}
+        run: |
+          uv run --isolated --no-project --with tomlkit python - <<'PY'
+          import os
+          from pathlib import Path
+
+          import tomlkit
+
+          repo, ref = os.environ["REPO"], os.environ["HEAD_SHA"]
+          path = Path(os.environ["LLM_PROMPTS_HOME"]) / "llm-prompts" / "config" / "config.toml"
+          doc = tomlkit.parse(path.read_text(encoding="utf-8"))
+          tool = next((t for t in doc["tools"] if t["name"] == repo), None)
+          if tool is None:
+              raise SystemExit(f"No [[tools]] entry named {repo} in {path}")
+          tool["source"] = f"git+https://github.com/alexfayers/{repo}.git"
+          tool["ref"] = ref
+          path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+          print(f"{repo}: ref = {ref}")
+          PY
+
+      - run: llm-prompts update
+      - name: Restart the memory server
+        run: sh "$RUNNER_TEMP/start-memory.sh"
+      - run: just upgrade-smoke
+      - name: Update again
+        run: llm-prompts update

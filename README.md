@@ -49,6 +49,17 @@ Shared GitHub Actions for the llm-prompts, cline-hooks and mcp-memory repositori
 - The check fails when the PR body is missing or has an empty `## What` or `## Why` section, or keeps a `<!--` placeholder comment.
 - Bot PRs are exempt.
 
+## Upgrade smoke
+
+- `upgrade-smoke.yml` checks that the latest releases upgrade to the PR head. Callers run it with `workflow_call` and input `repo`: `llm-prompts`, `cline-hooks` or `mcp-memory`.
+- It runs on Ubuntu and macOS. HOME, the XDG folders and `LLM_PROMPTS_HOME` point at a temporary folder.
+- Shims make `sudo`, `systemctl` and `launchctl` fail, so `mcp-memory setup-service` installs no system service. The shims stay on PATH for the caller's recipes, so a recipe that needs `sudo` fails.
+- The shims are a shortcut. Replace them with `MCP_MEMORY_NO_SERVICE=1` once mcp-memory#260 is in the latest release.
+- The job runs the mcp-memory server itself on a free `MCP_MEMORY_PORT`.
+- It installs the Claude Code CLI and the latest releases with `llm-prompts setup` and `llm-prompts install claude-code`. It checks that Claude Code has the memory server, then runs `just upgrade-seed`.
+- It points the `repo` tool's config entry at the PR head commit, then runs `llm-prompts update`. It restarts the memory server, then runs `just upgrade-smoke` and `llm-prompts update` again.
+- The calling repo's justfile must have `upgrade-seed` and `upgrade-smoke` recipes.
+
 ## Tests
 
 ```sh
