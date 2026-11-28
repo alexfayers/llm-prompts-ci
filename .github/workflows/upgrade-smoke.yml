@@ -169,3 +169,21 @@ jobs:
       - run: just upgrade-smoke
       - name: Update again
         run: llm-prompts update
+      - name: Check the cline-hooks hooks still run
+        if: inputs.repo != 'cline-hooks'
+        run: |
+          export CLINE_HOOKS_DATA_DIR="$RUNNER_TEMP/cline-hooks-check"
+          out="$(cline-hook plugins 2>&1)" || { printf '%s\n' "$out"; echo '::error::cline-hook plugins failed'; exit 1; }
+          grep -q 'check_pending: clean' <<< "$out" || { printf '%s\n' "$out"; echo '::error::cline-hook plugins failed'; exit 1; }
+          payload="$(jq -cn --arg cwd "$PWD" '{session_id: "upgrade-smoke", transcript_path: "", cwd: $cwd, hook_event_name: "PreToolUse", tool_name: "Read", tool_input: {file_path: ($cwd + "/README.md")}}')"
+          commands="$(jq -r '[.hooks[]?[]?.hooks[]? | select(.type == "command") | .command | select(test("cline-hook"))] | unique[]' "$HOME/.claude/settings.json")"
+          [ -n "$commands" ] || { echo '::error::~/.claude/settings.json has no cline-hook commands'; exit 1; }
+          while IFS= read -r command; do
+            output="$(printf '%s\n' "$payload" | sh -c "$command" 2>&1)" || { printf '%s\n' "$output"; echo "::error::hook command failed: $command"; exit 1; }
+          done <<< "$commands"
+          log="$CLINE_HOOKS_DATA_DIR/cline-hooks.log"
+          [ -f "$log" ] || { echo "::error::$log is missing"; exit 1; }
+          if grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8} (ERROR|CRITICAL) ' "$log"; then
+            echo '::error::cline-hooks logged errors'
+            exit 1
+          fi
