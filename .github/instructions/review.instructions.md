@@ -102,6 +102,7 @@ excludeAgent: "cloud-agent"
 - Flag a test tied to live external state, such as dates, registries or service status.
 - Flag one test per item of a repeated case. One representative test covers the behaviour.
 - Flag new tests in a pure refactor. A refactor relies on the existing tests.
+- Flag a new test that adds no regression coverage. Suggest removing it, not expanding it.
 
 ## Public safety
 
