@@ -58,6 +58,11 @@ Shared GitHub Actions for the llm-prompts, cline-hooks and mcp-memory repositori
 - The job runs the mcp-memory server itself on a free `MCP_MEMORY_PORT`.
 - It installs the Claude Code CLI and the latest releases with `llm-prompts setup` and `llm-prompts install claude-code`. It checks that each tool is at its latest release and that Claude Code has the memory server, then runs `just upgrade-seed`.
 - It points the `repo` tool's config entry at the PR head commit, then runs `llm-prompts update`. It restarts the memory server, then runs `just upgrade-smoke` and `llm-prompts update` again.
+- Outside cline-hooks, it then runs `cline-hook plugins` and each `cline-hook` command in `~/.claude/settings.json` on a PreToolUse `Read` payload. It fails if a command fails or cline-hooks logs an error.
+- Each tool's start is proven by one step:
+  - llm-prompts: `llm-prompts update`.
+  - mcp-memory: "Restart the memory server".
+  - cline-hooks: "Check the cline-hooks hooks still run", or the cline-hooks `upgrade-smoke` recipe in the cline-hooks job.
 - The calling repo's justfile must have `upgrade-seed` and `upgrade-smoke` recipes.
 - Callers gate the job with `needs: unblocked`, like their other test jobs.
 
