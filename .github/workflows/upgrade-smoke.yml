@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   upgrade-smoke:
+    if: github.head_ref != 'release-please--branches--main'
     strategy:
       fail-fast: false
       matrix:
@@ -169,3 +170,18 @@ jobs:
       - run: just upgrade-smoke
       - name: Update again
         run: llm-prompts update
+
+  result:
+    if: always()
+    needs: upgrade-smoke
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Check the upgrade smoke legs
+        env:
+          RESULT: ${{ needs.upgrade-smoke.result }}
+        run: |
+          case "$RESULT" in
+            success | skipped) echo "upgrade-smoke: $RESULT" ;;
+            *) echo "::error::upgrade-smoke finished with '$RESULT'"; exit 1 ;;
+          esac

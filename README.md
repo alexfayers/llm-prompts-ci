@@ -59,7 +59,8 @@ Shared GitHub Actions for the llm-prompts, cline-hooks and mcp-memory repositori
 - It installs the Claude Code CLI and the latest releases with `llm-prompts setup` and `llm-prompts install claude-code`. It checks that each tool is at its latest release and that Claude Code has the memory server, then runs `just upgrade-seed`.
 - It points the `repo` tool's config entry at the PR head commit, then runs `llm-prompts update`. It restarts the memory server, then runs `just upgrade-smoke` and `llm-prompts update` again.
 - The calling repo's justfile must have `upgrade-seed` and `upgrade-smoke` recipes.
-- Callers gate the job with `needs: unblocked`, like their other test jobs.
+- Callers gate the job with `needs: unblocked`, like their other test jobs. The caller job is named `upgrade-smoke` and has no job-level `if:`, because the workflow skips release-please PRs itself.
+- A `result` job always runs and fails unless every leg passed or was skipped. Rulesets require `upgrade-smoke / result`, which keeps one name whether the legs run or are skipped.
 
 ## Tests
 
