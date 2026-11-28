@@ -1,0 +1,4 @@
+paths:
+  .github/workflows/hide-outdated-copilot-reviews.yml:
+    ignore:
+      - SC2016
